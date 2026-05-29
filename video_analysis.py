@@ -73,7 +73,7 @@ class RecordedVideoAnalyzer:
         target = Path(output_path) if output_path is not None else self._default_audio_output_path(video)
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        # 统一抽成单声道 8k PCM，方便后续和随机音频参考样本做同口径比较。
+        # Normalize to mono 8 kHz PCM so recorded audio and reference audio share the same format.
         command = [
             ffmpeg,
             "-y",
@@ -105,7 +105,7 @@ class RecordedVideoAnalyzer:
         audio_path = self.extract_audio(video_path, extracted_audio_path)
         samples = self._read_wav_samples(audio_path)
         frame_rms = self._frame_rms_values(samples)
-        # 只要有足够能量的帧出现，就认为录制里确实存在声音。
+        # Treat any frame above threshold as evidence that audible sound exists.
         active_frames = [value for value in frame_rms if value >= rms_threshold]
         average_rms = sum(frame_rms) / len(frame_rms) if frame_rms else 0.0
         max_rms = max(frame_rms) if frame_rms else 0.0
@@ -132,7 +132,7 @@ class RecordedVideoAnalyzer:
 
         target_signature = self._normalize_signature(self._frame_rms_values(target_samples))
         reference_signature = self._normalize_signature(self._frame_rms_values(reference_samples))
-        # 使用帧能量签名做滑窗匹配，找出参考随机音频在录制结果中的最佳对齐位置。
+        # Use sliding-window energy matching to find where the reference best aligns.
         best_score, best_offset = self._best_signature_match(target_signature, reference_signature)
 
         return ReferenceAudioMatchResult(
@@ -190,7 +190,7 @@ class RecordedVideoAnalyzer:
     def _normalize_signature(self, values: list[float]) -> list[float]:
         if not values:
             return []
-        # 去均值并归一化，降低整体音量大小差异对匹配分数的影响。
+        # Remove mean and normalize energy so matching is less sensitive to gain changes.
         mean = sum(values) / len(values)
         centered = [value - mean for value in values]
         energy = math.sqrt(sum(value * value for value in centered))

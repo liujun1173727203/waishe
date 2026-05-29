@@ -33,11 +33,22 @@ class RandomAudioTalkResult:
     frames_sent: int
 
 
+@dataclass(frozen=True)
+class PreparedRandomAudio:
+    file_path: Path
+    duration_seconds: int
+    encode_type: int
+    voice_channel: int
+    pcm_bytes: bytes
+    encoded_bytes: bytes
+    frame_count: int
+
+
 class VoiceTalkUseCases:
     def __init__(self, sdk: HikvisionVoiceSDK) -> None:
         self.sdk = sdk
 
-    def play_random_audio_file(
+    def prepare_random_audio_file(
         self,
         session: DeviceSession,
         duration_seconds: int = 3,
@@ -70,33 +81,80 @@ class VoiceTalkUseCases:
         )
         encoded_bytes = self._encode_pcm_for_device(pcm_bytes, compress.encode_type)
 
+        frames = self._split_encoded_frames(encoded_bytes, compress.encode_type)
+        return PreparedRandomAudio(
+            file_path=wav_path,
+            duration_seconds=duration_seconds,
+            encode_type=compress.encode_type,
+            voice_channel=target_channel,
+            pcm_bytes=pcm_bytes,
+            encoded_bytes=encoded_bytes,
+            frame_count=len(frames),
+        )
+
+    def send_prepared_audio(
+        self,
+        session: DeviceSession,
+        prepared_audio: PreparedRandomAudio,
+        per_frame_delay: float = FRAME_MS / 1000.0,
+        encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
+    ) -> RandomAudioTalkResult:
         bytes_sent = 0
         frames_sent = 0
         with self.sdk.start_voice_forward(
             session=session,
-            voice_channel=target_channel,
+            voice_channel=prepared_audio.voice_channel,
             encoded_audio_callback=encoded_audio_callback,
         ) as forward:
-            for frame in self._split_encoded_frames(encoded_bytes, compress.encode_type):
+            for frame in self._split_encoded_frames(prepared_audio.encoded_bytes, prepared_audio.encode_type):
                 forward.send_encoded_audio(frame)
                 bytes_sent += len(frame)
                 frames_sent += 1
                 time.sleep(per_frame_delay)
 
         return RandomAudioTalkResult(
-            file_path=wav_path,
-            duration_seconds=duration_seconds,
-            encode_type=compress.encode_type,
-            voice_channel=target_channel,
+            file_path=prepared_audio.file_path,
+            duration_seconds=prepared_audio.duration_seconds,
+            encode_type=prepared_audio.encode_type,
+            voice_channel=prepared_audio.voice_channel,
             bytes_sent=bytes_sent,
             frames_sent=frames_sent,
         )
 
-    def _build_output_path(self, host: str, output_dir: str | Path | None) -> Path:
+    def split_prepared_audio_frames(self, prepared_audio: PreparedRandomAudio) -> list[bytes]:
+        return self._split_encoded_frames(prepared_audio.encoded_bytes, prepared_audio.encode_type)
+
+    def play_random_audio_file(
+        self,
+        session: DeviceSession,
+        duration_seconds: int = 3,
+        voice_channel: Optional[int] = None,
+        output_dir: str | Path | None = None,
+        seed: Optional[int] = None,
+        amplitude_ratio: float = 0.35,
+        per_frame_delay: float = FRAME_MS / 1000.0,
+        encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
+    ) -> RandomAudioTalkResult:
+        prepared_audio = self.prepare_random_audio_file(
+            session=session,
+            duration_seconds=duration_seconds,
+            voice_channel=voice_channel,
+            output_dir=output_dir,
+            seed=seed,
+            amplitude_ratio=amplitude_ratio,
+        )
+        return self.send_prepared_audio(
+            session=session,
+            prepared_audio=prepared_audio,
+            per_frame_delay=per_frame_delay,
+            encoded_audio_callback=encoded_audio_callback,
+        )
+
+    def _build_output_path(self, host: str, output_dir: str | Path | None, prefix: str = "random_audio") -> Path:
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         base_dir = Path(output_dir) if output_dir is not None else Path.cwd() / "recordings" / "use_cases" / host_dir
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return base_dir / f"random_audio_{timestamp}.wav"
+        return base_dir / f"{prefix}_{timestamp}.wav"
 
     def _generate_random_pcm_wav(
         self,

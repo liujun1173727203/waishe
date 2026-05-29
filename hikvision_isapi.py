@@ -51,6 +51,12 @@ class AudioIoVolumeStatus:
     output_status: AudioVolumeStatus
 
 
+@dataclass(frozen=True)
+class AudioInputCapabilityStatus:
+    supported: bool
+    request_path: str
+
+
 class HikvisionIsapiClient:
     def __init__(self, sdk: HikvisionVoiceSDK) -> None:
         self.sdk = sdk
@@ -83,6 +89,24 @@ class HikvisionIsapiClient:
     def get_audio_capabilities(self, session: DeviceSession) -> str:
         xml_text, _ = self.sdk.stdxml_config(session, "GET", "/ISAPI/System/Audio/capabilities")
         return xml_text
+
+    def get_audio_input_capability_status(self, session: DeviceSession) -> AudioInputCapabilityStatus:
+        candidate_paths = [
+            "/ISAPI/System/Audio/capabilities",
+            "/ISAPI/System/TwoWayAudio/channels/1/capabilities",
+        ]
+        path, root = self._get_first_xml(session, candidate_paths)
+        if path is None or root is None:
+            return AudioInputCapabilityStatus(supported=False, request_path="")
+
+        for node in root.iter():
+            local_name = _local_name(node.tag).lower()
+            if local_name in {"audioin", "audioinput", "twowayaudiochannel", "audiochannel"}:
+                return AudioInputCapabilityStatus(supported=True, request_path=path)
+            if local_name in {"audioinputsupport", "supportaudioinput"}:
+                value = (node.text or "").strip().lower()
+                return AudioInputCapabilityStatus(supported=value in {"true", "1"}, request_path=path)
+        return AudioInputCapabilityStatus(supported=False, request_path=path)
 
     def get_streaming_channel_config(
         self,
@@ -125,7 +149,7 @@ class HikvisionIsapiClient:
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
 
-        # 先看能力描述里是否存在 Audio 相关节点，避免直接对不支持的设备下发配置。
+        # Check capability XML first so unsupported devices are not configured blindly.
         capabilities_xml = self.get_streaming_channel_capabilities(session, target_channel, stream_type)
         cap_root = ET.fromstring(capabilities_xml)
         audio_cap_node = _find_first_by_local_name(cap_root, "Audio")
@@ -143,7 +167,7 @@ class HikvisionIsapiClient:
         if audio_node is None:
             audio_node = ET.SubElement(config_root, _child_tag_like(config_root, "Audio"))
 
-        # 不同设备固件可能返回 enable 或 enabled，这里统一兼容。
+        # Firmware variants may use either enable or enabled for the same flag.
         enabled_node = _find_first_by_local_name(audio_node, "enabled")
         if enabled_node is None:
             enabled_node = _find_first_by_local_name(audio_node, "enable")
@@ -213,7 +237,7 @@ class HikvisionIsapiClient:
         config_paths: list[str],
         capability_paths: list[str],
     ) -> AudioVolumeStatus:
-        # 先从多个候选配置路径里找到当前设备真正支持的那一条。
+        # Try multiple candidate paths because audio config endpoints vary by model.
         config_path, config_root = self._get_first_xml(session, config_paths)
         if config_root is None or config_path is None:
             return AudioVolumeStatus(False, False, 0, 0, "")
@@ -222,7 +246,7 @@ class HikvisionIsapiClient:
         if volume_node is None:
             return AudioVolumeStatus(False, False, 0, 0, config_path)
 
-        # 优先使用能力节点里的最大值，拿不到时再退回到配置节点属性或默认值。
+        # Prefer max from capabilities, then from the config node, then fall back to 15.
         max_value = self._find_volume_max(session, capability_paths) or self._max_from_node(volume_node) or 15
         current_value = self._safe_int(volume_node.text)
         if current_value is None:
@@ -241,7 +265,7 @@ class HikvisionIsapiClient:
                 xml_text, _ = self.sdk.stdxml_config(session, "GET", path)
                 return path, ET.fromstring(xml_text)
             except Exception:
-                # 同一能力在不同型号设备上路径可能不同，失败时继续尝试下一个候选路径。
+                # Keep probing fallback paths until one works on the current device model.
                 continue
         return None, None
 
