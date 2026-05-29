@@ -515,4 +515,5 @@ class VoiceForwardSession:
 
 if __name__ =="__main__":
     sdk=HikvisionVoiceSDK()
+    sdk.initialize(enable_log=True)
     sdk.login("10.41.203.51", 80, "admin", "abcd1234")
