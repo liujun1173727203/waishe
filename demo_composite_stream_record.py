@@ -30,6 +30,7 @@ def main() -> int:
         session = sdk.login(args.host, args.port, args.username, args.password)
         channel = args.channel or session.default_preview_channel
 
+        volume_status = isapi.ensure_audio_input_output_volume_max(session=session)
         status = isapi.ensure_composite_stream_recording_enabled(session=session, channel=channel)
         if not status.supported:
             raise HikvisionSDKError(
@@ -48,6 +49,11 @@ def main() -> int:
             f"trackStreamID={status.track_stream_id}",
             f"audio_enabled={status.audio_enabled}",
             f"changed={status.changed}",
+        )
+        print(
+            "audio volume:",
+            f"input={volume_status.input_status.value}/{volume_status.input_status.maximum}",
+            f"output={volume_status.output_status.value}/{volume_status.output_status.maximum}",
         )
         print(f"recording started: channel={channel} output={recorder.file_path}")
         time.sleep(args.duration)

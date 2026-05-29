@@ -36,6 +36,21 @@ class CompositeStreamStatus:
     changed: bool
 
 
+@dataclass(frozen=True)
+class AudioVolumeStatus:
+    supported: bool
+    changed: bool
+    value: int
+    maximum: int
+    request_path: str
+
+
+@dataclass(frozen=True)
+class AudioIoVolumeStatus:
+    input_status: AudioVolumeStatus
+    output_status: AudioVolumeStatus
+
+
 class HikvisionIsapiClient:
     def __init__(self, sdk: HikvisionVoiceSDK) -> None:
         self.sdk = sdk
@@ -63,6 +78,10 @@ class HikvisionIsapiClient:
             "GET",
             f"/ISAPI/Streaming/channels/{track_stream_id}/capabilities",
         )
+        return xml_text
+
+    def get_audio_capabilities(self, session: DeviceSession) -> str:
+        xml_text, _ = self.sdk.stdxml_config(session, "GET", "/ISAPI/System/Audio/capabilities")
         return xml_text
 
     def get_streaming_channel_config(
@@ -147,3 +166,113 @@ class HikvisionIsapiClient:
             audio_enabled=True,
             changed=True,
         )
+
+    def set_audio_input_volume_to_max(self, session: DeviceSession, channel: int = 1) -> AudioVolumeStatus:
+        return self._set_audio_volume_to_max(
+            session=session,
+            config_paths=[
+                f"/ISAPI/System/Audio/AudioIn/channels/{channel}",
+                f"/ISAPI/System/Audio/channels/{channel}/AudioIn",
+            ],
+            capability_paths=[
+                f"/ISAPI/System/Audio/AudioIn/channels/{channel}/capabilities",
+                "/ISAPI/System/Audio/capabilities",
+            ],
+        )
+
+    def set_audio_output_volume_to_max(self, session: DeviceSession, channel: int = 1) -> AudioVolumeStatus:
+        return self._set_audio_volume_to_max(
+            session=session,
+            config_paths=[
+                f"/ISAPI/System/Audio/AudioOut/channels/{channel}",
+                "/ISAPI/System/SoundCfg",
+            ],
+            capability_paths=[
+                f"/ISAPI/System/Audio/AudioOut/channels/{channel}/capabilities",
+                "/ISAPI/System/Audio/capabilities",
+                "/ISAPI/System/SoundCfg/capabilities",
+            ],
+        )
+
+    def ensure_audio_input_output_volume_max(
+        self,
+        session: DeviceSession,
+        input_channel: int = 1,
+        output_channel: int = 1,
+    ) -> AudioIoVolumeStatus:
+        return AudioIoVolumeStatus(
+            input_status=self.set_audio_input_volume_to_max(session, input_channel),
+            output_status=self.set_audio_output_volume_to_max(session, output_channel),
+        )
+
+    def _set_audio_volume_to_max(
+        self,
+        session: DeviceSession,
+        config_paths: list[str],
+        capability_paths: list[str],
+    ) -> AudioVolumeStatus:
+        config_path, config_root = self._get_first_xml(session, config_paths)
+        if config_root is None or config_path is None:
+            return AudioVolumeStatus(False, False, 0, 0, "")
+
+        volume_node = self._find_volume_node(config_root)
+        if volume_node is None:
+            return AudioVolumeStatus(False, False, 0, 0, config_path)
+
+        max_value = self._find_volume_max(session, capability_paths) or self._max_from_node(volume_node) or 15
+        current_value = self._safe_int(volume_node.text)
+        if current_value is None:
+            current_value = 0
+        if current_value >= max_value:
+            return AudioVolumeStatus(True, False, current_value, max_value, config_path)
+
+        volume_node.text = str(max_value)
+        xml_body = ET.tostring(config_root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+        self.sdk.stdxml_config(session, "PUT", config_path, body=xml_body)
+        return AudioVolumeStatus(True, True, max_value, max_value, config_path)
+
+    def _get_first_xml(self, session: DeviceSession, paths: list[str]) -> tuple[Optional[str], Optional[ET.Element]]:
+        for path in paths:
+            try:
+                xml_text, _ = self.sdk.stdxml_config(session, "GET", path)
+                return path, ET.fromstring(xml_text)
+            except Exception:
+                continue
+        return None, None
+
+    def _find_volume_max(self, session: DeviceSession, capability_paths: list[str]) -> Optional[int]:
+        _path, cap_root = self._get_first_xml(session, capability_paths)
+        if cap_root is None:
+            return None
+
+        volume_node = self._find_volume_node(cap_root)
+        if volume_node is not None:
+            max_value = self._max_from_node(volume_node)
+            if max_value is not None:
+                return max_value
+
+        for node in cap_root.iter():
+            attr_max = node.attrib.get("max")
+            if _local_name(node.tag) in {"audioVolume", "volume"} and attr_max is not None:
+                parsed = self._safe_int(attr_max)
+                if parsed is not None:
+                    return parsed
+        return None
+
+    def _find_volume_node(self, root: ET.Element) -> Optional[ET.Element]:
+        for name in ("audioVolume", "volume"):
+            node = _find_first_by_local_name(root, name)
+            if node is not None:
+                return node
+        return None
+
+    def _max_from_node(self, node: ET.Element) -> Optional[int]:
+        return self._safe_int(node.attrib.get("max"))
+
+    def _safe_int(self, value: Optional[str]) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
