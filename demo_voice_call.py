@@ -9,11 +9,11 @@ from hikvision_voice import AUDIO_FLAG_LOCAL, HikvisionSDKError, HikvisionVoiceS
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="PC <-> Hikvision device voice talk demo")
-    parser.add_argument("--host", required=True, help="device ip or hostname")
+    parser.add_argument("--host", default="10.41.203.51", help="device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
-    parser.add_argument("--username", required=True, help="device username")
-    parser.add_argument("--password", required=True, help="device password")
-    parser.add_argument("--voice-channel", type=int, default=0, help="voice talk channel, 0 means auto")
+    parser.add_argument("--username", default="admin", help="device username")
+    parser.add_argument("--password", default="abcd1234", help="device password")
+    parser.add_argument("--voice-channel", type=int, default=1, help="voice talk channel, 0 means auto")
     parser.add_argument("--windows-api", action="store_true", help="use legacy windows api talk mode")
     parser.add_argument("--pcm-callback", action="store_true", help="request raw pcm callback instead of encoded data")
     parser.add_argument("--enable-log", action="store_true", help="enable sdk log output")
