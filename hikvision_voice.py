@@ -4,6 +4,7 @@ import atexit
 import ctypes
 import os
 import threading
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from ctypes import POINTER, Structure, byref, c_bool, c_byte, c_char, c_char_p, c_int, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
 from dataclasses import dataclass
@@ -34,6 +35,31 @@ LINK_MODE_TCP = 0
 LINK_MODE_UDP = 1
 
 SDK_BOOL = c_uint32
+
+ISAPI_SCHEMA = "http://www.isapi.org/ver20/XMLSchema"
+XML_BUFFER_SIZE = 1024 * 1024
+
+
+def _xml_name(local_name: str) -> str:
+    return f"{{{ISAPI_SCHEMA}}}{local_name}"
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _find_first_by_local_name(root: ET.Element, local_name: str) -> Optional[ET.Element]:
+    for node in root.iter():
+        if _local_name(node.tag) == local_name:
+            return node
+    return None
+
+
+def _child_tag_like(node: ET.Element, local_name: str) -> str:
+    if node.tag.startswith("{"):
+        namespace = node.tag.split("}", 1)[0][1:]
+        return f"{{{namespace}}}{local_name}"
+    return local_name
 
 
 class HikvisionSDKError(RuntimeError):
@@ -99,6 +125,31 @@ class NET_DVR_PREVIEWINFO(Structure):
         ("byRecvMetaData", c_ubyte),
         ("byDataType", c_ubyte),
         ("byRes", c_ubyte * 213),
+    ]
+
+
+class NET_DVR_XML_CONFIG_INPUT(Structure):
+    _fields_ = [
+        ("dwSize", c_uint32),
+        ("lpRequestUrl", c_void_p),
+        ("dwRequestUrlLen", c_uint32),
+        ("lpInBuffer", c_void_p),
+        ("dwInBufferSize", c_uint32),
+        ("dwRecvTimeOut", c_uint32),
+        ("byForceEncrpt", c_ubyte),
+        ("byRes", c_ubyte * 31),
+    ]
+
+
+class NET_DVR_XML_CONFIG_OUTPUT(Structure):
+    _fields_ = [
+        ("dwSize", c_uint32),
+        ("lpOutBuffer", c_void_p),
+        ("dwOutBufferSize", c_uint32),
+        ("dwReturnedXMLSize", c_uint32),
+        ("lpStatusBuffer", c_void_p),
+        ("dwStatusSize", c_uint32),
+        ("byRes", c_ubyte * 32),
     ]
 
 
@@ -194,6 +245,14 @@ class AudioCompressInfo:
     sampling_rate: int
     bit_rate: int
     support_flag: int
+
+
+@dataclass(frozen=True)
+class CompositeStreamStatus:
+    supported: bool
+    track_stream_id: int
+    audio_enabled: bool
+    changed: bool
 
 
 @dataclass(frozen=True)
@@ -437,6 +496,8 @@ class HikvisionVoiceSDK:
         self._sdk.NET_DVR_SaveRealData.restype = c_bool
         self._sdk.NET_DVR_StopSaveRealData.argtypes = [c_long]
         self._sdk.NET_DVR_StopSaveRealData.restype = c_bool
+        self._sdk.NET_DVR_STDXMLConfig.argtypes = [c_long, POINTER(NET_DVR_XML_CONFIG_INPUT), POINTER(NET_DVR_XML_CONFIG_OUTPUT)]
+        self._sdk.NET_DVR_STDXMLConfig.restype = c_bool
 
     def _build_callback(self, callback: Optional[Callable[[int, bytes, int], None]]) -> VOICE_DATA_CALLBACK:
         def _wrapped(voice_handle: int, recv_buffer: bytes, buf_size: int, audio_flag: int, _user: int) -> None:
@@ -466,6 +527,141 @@ class HikvisionVoiceSDK:
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return Path.cwd() / "recordings" / "streams" / host_dir / f"stream_ch{channel}_{timestamp}.mp4"
+
+    def _stream_type_to_track_suffix(self, stream_type: int) -> int:
+        mapping = {
+            STREAM_TYPE_MAIN: 1,
+            STREAM_TYPE_SUB: 2,
+        }
+        return mapping.get(stream_type, stream_type + 1)
+
+    def _track_stream_id(self, channel: int, stream_type: int) -> int:
+        return channel * 100 + self._stream_type_to_track_suffix(stream_type)
+
+    def _stdxml_config(
+        self,
+        session: DeviceSession,
+        method: str,
+        path: str,
+        body: str | None = None,
+        timeout_ms: int = 5000,
+    ) -> tuple[str, str]:
+        self._require_initialized()
+        request_line = f"{method.upper()} {path}"
+        request_bytes = request_line.encode("ascii")
+        in_bytes = body.encode("utf-8") if body is not None else b""
+        request_buffer = ctypes.create_string_buffer(request_bytes)
+        in_buffer = ctypes.create_string_buffer(in_bytes) if in_bytes else None
+        out_buffer = ctypes.create_string_buffer(XML_BUFFER_SIZE)
+        status_buffer = ctypes.create_string_buffer(16 * 1024)
+
+        input_cfg = NET_DVR_XML_CONFIG_INPUT()
+        input_cfg.dwSize = ctypes.sizeof(input_cfg)
+        input_cfg.lpRequestUrl = ctypes.cast(request_buffer, c_void_p)
+        input_cfg.dwRequestUrlLen = len(request_bytes)
+        if in_buffer is not None:
+            input_cfg.lpInBuffer = ctypes.cast(in_buffer, c_void_p)
+            input_cfg.dwInBufferSize = len(in_bytes)
+        input_cfg.dwRecvTimeOut = timeout_ms
+
+        output_cfg = NET_DVR_XML_CONFIG_OUTPUT()
+        output_cfg.dwSize = ctypes.sizeof(output_cfg)
+        output_cfg.lpOutBuffer = ctypes.cast(out_buffer, c_void_p)
+        output_cfg.dwOutBufferSize = ctypes.sizeof(out_buffer)
+        output_cfg.lpStatusBuffer = ctypes.cast(status_buffer, c_void_p)
+        output_cfg.dwStatusSize = ctypes.sizeof(status_buffer)
+
+        ok = self._sdk.NET_DVR_STDXMLConfig(session.user_id, byref(input_cfg), byref(output_cfg))
+        if not ok:
+            raise self._last_error(f"NET_DVR_STDXMLConfig failed for {request_line}", "NET_DVR_STDXMLConfig")
+
+        out_text = out_buffer.raw[: output_cfg.dwReturnedXMLSize].decode("utf-8", errors="ignore").strip("\x00")
+        status_text = status_buffer.value.decode("utf-8", errors="ignore").strip("\x00")
+        return out_text, status_text
+
+    def get_streaming_channel_capabilities(
+        self,
+        session: DeviceSession,
+        channel: Optional[int] = None,
+        stream_type: int = STREAM_TYPE_MAIN,
+    ) -> str:
+        target_channel = channel or session.default_preview_channel
+        track_stream_id = self._track_stream_id(target_channel, stream_type)
+        xml_text, _ = self._stdxml_config(session, "GET", f"/ISAPI/Streaming/channels/{track_stream_id}/capabilities")
+        return xml_text
+
+    def get_streaming_channel_config(
+        self,
+        session: DeviceSession,
+        channel: Optional[int] = None,
+        stream_type: int = STREAM_TYPE_MAIN,
+    ) -> str:
+        target_channel = channel or session.default_preview_channel
+        track_stream_id = self._track_stream_id(target_channel, stream_type)
+        xml_text, _ = self._stdxml_config(session, "GET", f"/ISAPI/Streaming/channels/{track_stream_id}")
+        return xml_text
+
+    def set_streaming_channel_config(
+        self,
+        session: DeviceSession,
+        xml_body: str,
+        channel: Optional[int] = None,
+        stream_type: int = STREAM_TYPE_MAIN,
+    ) -> str:
+        target_channel = channel or session.default_preview_channel
+        track_stream_id = self._track_stream_id(target_channel, stream_type)
+        _, status_text = self._stdxml_config(session, "PUT", f"/ISAPI/Streaming/channels/{track_stream_id}", body=xml_body)
+        return status_text
+
+    def ensure_composite_stream_recording_enabled(
+        self,
+        session: DeviceSession,
+        channel: Optional[int] = None,
+        stream_type: int = STREAM_TYPE_MAIN,
+    ) -> CompositeStreamStatus:
+        target_channel = channel or session.default_preview_channel
+        track_stream_id = self._track_stream_id(target_channel, stream_type)
+        capabilities_xml = self.get_streaming_channel_capabilities(session, target_channel, stream_type)
+        cap_root = ET.fromstring(capabilities_xml)
+        audio_cap_node = _find_first_by_local_name(cap_root, "Audio")
+        if audio_cap_node is None:
+            return CompositeStreamStatus(
+                supported=False,
+                track_stream_id=track_stream_id,
+                audio_enabled=False,
+                changed=False,
+            )
+
+        config_xml = self.get_streaming_channel_config(session, target_channel, stream_type)
+        config_root = ET.fromstring(config_xml)
+        audio_node = _find_first_by_local_name(config_root, "Audio")
+        if audio_node is None:
+            audio_node = ET.SubElement(config_root, _child_tag_like(config_root, "Audio"))
+
+        enabled_node = _find_first_by_local_name(audio_node, "enabled")
+        if enabled_node is None:
+            enabled_node = _find_first_by_local_name(audio_node, "enable")
+        if enabled_node is None:
+            enabled_node = ET.SubElement(audio_node, _child_tag_like(audio_node, "enabled"))
+
+        current_value = (enabled_node.text or "").strip().lower()
+        if current_value in {"true", "1"}:
+            return CompositeStreamStatus(
+                supported=True,
+                track_stream_id=track_stream_id,
+                audio_enabled=True,
+                changed=False,
+            )
+
+        enabled_node.text = "true"
+        xml_body = ET.tostring(config_root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+        self.set_streaming_channel_config(session, xml_body, target_channel, stream_type)
+        return CompositeStreamStatus(
+            supported=True,
+            track_stream_id=track_stream_id,
+            audio_enabled=True,
+            changed=True,
+        )
 
     def _require_initialized(self) -> None:
         if not self._initialized or self._sdk is None:
