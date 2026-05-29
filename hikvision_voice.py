@@ -19,12 +19,19 @@ NET_SDK_INIT_CFG_LIBEAY_PATH = 3
 NET_SDK_INIT_CFG_SSLEAY_PATH = 4
 
 NET_SDK_LOCAL_CFG_TYPE_TALK_MODE = 5
+STREAM_ID_LEN = 32
 
 AUDIO_FLAG_LOCAL = 0
 AUDIO_FLAG_REMOTE = 1
 
 TALK_MODE_LIBRARY = 0
 TALK_MODE_WINDOWS_API = 1
+
+STREAM_TYPE_MAIN = 0
+STREAM_TYPE_SUB = 1
+
+LINK_MODE_TCP = 0
+LINK_MODE_UDP = 1
 
 SDK_BOOL = c_uint32
 
@@ -71,6 +78,27 @@ class NET_DVR_COMPRESSION_AUDIO(Structure):
         ("byAudioBitRate", c_ubyte),
         ("byRes", c_ubyte * 4),
         ("bySupport", c_ubyte),
+    ]
+
+
+class NET_DVR_PREVIEWINFO(Structure):
+    _fields_ = [
+        ("lChannel", c_long),
+        ("dwStreamType", c_uint32),
+        ("dwLinkMode", c_uint32),
+        ("hPlayWnd", c_void_p),
+        ("bBlocked", SDK_BOOL),
+        ("bPassbackRecord", SDK_BOOL),
+        ("byPreviewMode", c_ubyte),
+        ("byStreamID", c_ubyte * STREAM_ID_LEN),
+        ("byProtoType", c_ubyte),
+        ("byRes1", c_ubyte),
+        ("byVideoCodingType", c_ubyte),
+        ("dwDisplayBufNum", c_uint32),
+        ("byNPQMode", c_ubyte),
+        ("byRecvMetaData", c_ubyte),
+        ("byDataType", c_ubyte),
+        ("byRes", c_ubyte * 213),
     ]
 
 
@@ -157,6 +185,7 @@ class NET_DVR_DEVICEINFO_V40(Structure):
 
 
 VOICE_DATA_CALLBACK = ctypes.WINFUNCTYPE(None, c_long, c_char_p, c_uint32, c_ubyte, c_void_p)
+REAL_DATA_CALLBACK = ctypes.WINFUNCTYPE(None, c_long, c_uint32, c_void_p, c_uint32, c_void_p)
 
 
 @dataclass(frozen=True)
@@ -170,12 +199,17 @@ class AudioCompressInfo:
 @dataclass(frozen=True)
 class DeviceSession:
     user_id: int
+    host: str
     device_info: NET_DVR_DEVICEINFO_V30
     device_info_v40: Optional[NET_DVR_DEVICEINFO_V40] = None
 
     @property
     def default_voice_channel(self) -> int:
         return self.device_info.byStartDTalkChan or 1
+
+    @property
+    def default_preview_channel(self) -> int:
+        return self.device_info.byStartChan or 1
 
 
 class HikvisionVoiceSDK:
@@ -236,6 +270,7 @@ class HikvisionVoiceSDK:
             raise self._last_error(f"NET_DVR_Login_V40 failed for {host}:{port}", "NET_DVR_Login_V40")
         return DeviceSession(
             user_id=user_id,
+            host=host,
             device_info=device_info_v40.struDeviceV30,
             device_info_v40=device_info_v40,
         )
@@ -320,6 +355,30 @@ class HikvisionVoiceSDK:
         forward.start()
         return forward
 
+    def start_stream_record(
+        self,
+        session: DeviceSession,
+        file_path: str | os.PathLike[str],
+        channel: Optional[int] = None,
+        stream_type: int = STREAM_TYPE_MAIN,
+        link_mode: int = LINK_MODE_TCP,
+        blocked: bool = True,
+        real_data_callback: Optional[Callable[[int, int, bytes], None]] = None,
+    ) -> "StreamRecorder":
+        self._require_initialized()
+        recorder = StreamRecorder(
+            sdk=self,
+            session=session,
+            file_path=Path(file_path),
+            channel=channel or session.default_preview_channel,
+            stream_type=stream_type,
+            link_mode=link_mode,
+            blocked=blocked,
+            real_data_callback=real_data_callback,
+        )
+        recorder.start()
+        return recorder
+
     def _load_sdk(self) -> None:
         if not self.sdk_root.exists():
             raise FileNotFoundError(f"SDK path not found: {self.sdk_root}")
@@ -369,6 +428,14 @@ class HikvisionVoiceSDK:
         self._sdk.NET_DVR_StopVoiceCom.restype = c_bool
         self._sdk.NET_DVR_VoiceComSendData.argtypes = [c_long, c_char_p, c_uint32]
         self._sdk.NET_DVR_VoiceComSendData.restype = c_bool
+        self._sdk.NET_DVR_RealPlay_V40.argtypes = [c_long, POINTER(NET_DVR_PREVIEWINFO), REAL_DATA_CALLBACK, c_void_p]
+        self._sdk.NET_DVR_RealPlay_V40.restype = c_long
+        self._sdk.NET_DVR_StopRealPlay.argtypes = [c_long]
+        self._sdk.NET_DVR_StopRealPlay.restype = c_bool
+        self._sdk.NET_DVR_SaveRealData.argtypes = [c_long, c_char_p]
+        self._sdk.NET_DVR_SaveRealData.restype = c_bool
+        self._sdk.NET_DVR_StopSaveRealData.argtypes = [c_long]
+        self._sdk.NET_DVR_StopSaveRealData.restype = c_bool
 
     def _build_callback(self, callback: Optional[Callable[[int, bytes, int], None]]) -> VOICE_DATA_CALLBACK:
         def _wrapped(voice_handle: int, recv_buffer: bytes, buf_size: int, audio_flag: int, _user: int) -> None:
@@ -384,6 +451,15 @@ class HikvisionVoiceSDK:
 
     def _forget_callback(self, handle: int) -> None:
         self._active_callbacks.pop(handle, None)
+
+    def _build_real_data_callback(self, callback: Optional[Callable[[int, int, bytes], None]]) -> REAL_DATA_CALLBACK:
+        def _wrapped(real_handle: int, data_type: int, buffer_ptr: int, buf_size: int, _user: int) -> None:
+            if callback is None or not buffer_ptr or buf_size == 0:
+                return
+            data = ctypes.string_at(buffer_ptr, buf_size)
+            callback(real_handle, data_type, data)
+
+        return REAL_DATA_CALLBACK(_wrapped)
 
     def _require_initialized(self) -> None:
         if not self._initialized or self._sdk is None:
@@ -507,6 +583,89 @@ class VoiceForwardSession:
             raise self.sdk._last_error("NET_DVR_StopVoiceCom failed", "NET_DVR_StopVoiceCom")
 
     def __enter__(self) -> "VoiceForwardSession":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.stop()
+
+
+class StreamRecorder:
+    def __init__(
+        self,
+        sdk: HikvisionVoiceSDK,
+        session: DeviceSession,
+        file_path: Path,
+        channel: int,
+        stream_type: int,
+        link_mode: int,
+        blocked: bool,
+        real_data_callback: Optional[Callable[[int, int, bytes], None]],
+    ) -> None:
+        self.sdk = sdk
+        self.session = session
+        self.file_path = file_path
+        self.channel = channel
+        self.stream_type = stream_type
+        self.link_mode = link_mode
+        self.blocked = blocked
+        self.real_data_callback = real_data_callback
+        self.handle: Optional[int] = None
+        self._saving = False
+
+    def start(self) -> None:
+        if self.handle is not None:
+            return
+
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        preview_info = NET_DVR_PREVIEWINFO()
+        preview_info.lChannel = self.channel
+        preview_info.dwStreamType = self.stream_type
+        preview_info.dwLinkMode = self.link_mode
+        preview_info.hPlayWnd = None
+        preview_info.bBlocked = bool(self.blocked)
+        preview_info.bPassbackRecord = False
+
+        callback = self.sdk._build_real_data_callback(self.real_data_callback)
+        handle = self.sdk._sdk.NET_DVR_RealPlay_V40(
+            self.session.user_id,
+            byref(preview_info),
+            callback,
+            None,
+        )
+        if handle < 0:
+            raise self.sdk._last_error("NET_DVR_RealPlay_V40 failed", "NET_DVR_RealPlay_V40")
+
+        encoded_path = str(self.file_path.resolve()).encode("gbk", errors="ignore")
+        if not self.sdk._sdk.NET_DVR_SaveRealData(handle, encoded_path):
+            self.sdk._sdk.NET_DVR_StopRealPlay(handle)
+            raise self.sdk._last_error("NET_DVR_SaveRealData failed", "NET_DVR_SaveRealData")
+
+        self.handle = handle
+        self._saving = True
+        self.sdk._remember_callback(handle, callback)
+
+    def stop(self) -> None:
+        if self.handle is None:
+            return
+
+        handle = self.handle
+        self.handle = None
+        self.sdk._forget_callback(handle)
+        errors: list[HikvisionSDKError] = []
+
+        if self._saving:
+            self._saving = False
+            if not self.sdk._sdk.NET_DVR_StopSaveRealData(handle):
+                errors.append(self.sdk._last_error("NET_DVR_StopSaveRealData failed", "NET_DVR_StopSaveRealData"))
+
+        if not self.sdk._sdk.NET_DVR_StopRealPlay(handle):
+            errors.append(self.sdk._last_error("NET_DVR_StopRealPlay failed", "NET_DVR_StopRealPlay"))
+
+        if errors:
+            raise errors[0]
+
+    def __enter__(self) -> "StreamRecorder":
         self.start()
         return self
 
