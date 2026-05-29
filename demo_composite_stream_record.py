@@ -5,6 +5,7 @@ import sys
 import time
 from pathlib import Path
 
+from hikvision_isapi import HikvisionIsapiClient
 from hikvision_voice import HikvisionSDKError, HikvisionVoiceSDK
 
 
@@ -21,6 +22,7 @@ def main() -> int:
     args = parser.parse_args()
 
     sdk = HikvisionVoiceSDK()
+    isapi = HikvisionIsapiClient(sdk)
     session = None
     recorder = None
     try:
@@ -28,7 +30,7 @@ def main() -> int:
         session = sdk.login(args.host, args.port, args.username, args.password)
         channel = args.channel or session.default_preview_channel
 
-        status = sdk.ensure_composite_stream_recording_enabled(session=session, channel=channel)
+        status = isapi.ensure_composite_stream_recording_enabled(session=session, channel=channel)
         if not status.supported:
             raise HikvisionSDKError(
                 f"device channel {channel} does not support composite stream recording",
