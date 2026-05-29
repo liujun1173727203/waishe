@@ -1,0 +1,518 @@
+from __future__ import annotations
+
+import atexit
+import ctypes
+import os
+import threading
+from ctypes import POINTER, Structure, byref, c_bool, c_byte, c_char, c_char_p, c_int, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+
+NET_DVR_GET_COMPRESSCFG_AUD = 1058
+NET_DVR_SET_COMPRESSCFG_AUD = 1059
+
+NET_SDK_INIT_CFG_SDK_PATH = 2
+NET_SDK_INIT_CFG_LIBEAY_PATH = 3
+NET_SDK_INIT_CFG_SSLEAY_PATH = 4
+
+NET_SDK_LOCAL_CFG_TYPE_TALK_MODE = 5
+
+AUDIO_FLAG_LOCAL = 0
+AUDIO_FLAG_REMOTE = 1
+
+TALK_MODE_LIBRARY = 0
+TALK_MODE_WINDOWS_API = 1
+
+SDK_BOOL = c_uint32
+
+
+class HikvisionSDKError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        error_code: Optional[int] = None,
+        error_message: Optional[str] = None,
+        api_name: Optional[str] = None,
+    ) -> None:
+        parts = [message]
+        if api_name:
+            parts.append(f"api={api_name}")
+        if error_code is not None:
+            parts.append(f"error={error_code}")
+        if error_message:
+            parts.append(f"detail={error_message}")
+        super().__init__(" | ".join(parts))
+        self.error_code = error_code
+        self.error_message = error_message
+        self.api_name = api_name
+
+
+class NET_DVR_LOCAL_SDK_PATH(Structure):
+    _fields_ = [
+        ("sPath", c_char * 256),
+        ("byRes", c_byte * 128),
+    ]
+
+
+class NET_DVR_LOCAL_TALK_MODE_CFG(Structure):
+    _fields_ = [
+        ("byTalkMode", c_ubyte),
+        ("byRes", c_byte * 127),
+    ]
+
+
+class NET_DVR_COMPRESSION_AUDIO(Structure):
+    _fields_ = [
+        ("byAudioEncType", c_ubyte),
+        ("byAudioSamplingRate", c_ubyte),
+        ("byAudioBitRate", c_ubyte),
+        ("byRes", c_ubyte * 4),
+        ("bySupport", c_ubyte),
+    ]
+
+
+class NET_DVR_DEVICEINFO_V30(Structure):
+    _fields_ = [
+        ("sSerialNumber", c_ubyte * 48),
+        ("byAlarmInPortNum", c_ubyte),
+        ("byAlarmOutPortNum", c_ubyte),
+        ("byDiskNum", c_ubyte),
+        ("byDVRType", c_ubyte),
+        ("byChanNum", c_ubyte),
+        ("byStartChan", c_ubyte),
+        ("byAudioChanNum", c_ubyte),
+        ("byIPChanNum", c_ubyte),
+        ("byZeroChanNum", c_ubyte),
+        ("byMainProto", c_ubyte),
+        ("bySubProto", c_ubyte),
+        ("bySupport", c_ubyte),
+        ("bySupport1", c_ubyte),
+        ("bySupport2", c_ubyte),
+        ("wDevType", ctypes.c_uint16),
+        ("bySupport3", c_ubyte),
+        ("byMultiStreamProto", c_ubyte),
+        ("byStartDChan", c_ubyte),
+        ("byStartDTalkChan", c_ubyte),
+        ("byHighDChanNum", c_ubyte),
+        ("bySupport4", c_ubyte),
+        ("byLanguageType", c_ubyte),
+        ("byVoiceInChanNum", c_ubyte),
+        ("byStartVoiceInChanNo", c_ubyte),
+        ("bySupport5", c_ubyte),
+        ("bySupport6", c_ubyte),
+        ("byMirrorChanNum", c_ubyte),
+        ("wStartMirrorChanNo", ctypes.c_uint16),
+        ("bySupport7", c_ubyte),
+        ("byRes2", c_ubyte * 2),
+    ]
+
+
+class NET_DVR_USER_LOGIN_INFO(Structure):
+    _fields_ = [
+        ("sDeviceAddress", c_char * 129),
+        ("byUseTransport", c_ubyte),
+        ("wPort", c_uint16),
+        ("sUserName", c_char * 64),
+        ("sPassword", c_char * 64),
+        ("cbLoginResult", c_void_p),
+        ("bUseAsynLogin", SDK_BOOL),
+        ("byProxyType", c_ubyte),
+        ("byUseUTCTime", c_ubyte),
+        ("byLoginMode", c_ubyte),
+        ("byHttps", c_ubyte),
+        ("iProxyID", c_long),
+        ("byVerifyMode", c_ubyte),
+        ("byRes3", c_ubyte),
+        ("bySupport", c_ubyte),
+        ("byRetryLoginTime", c_ubyte),
+        ("byRes2", c_byte * 119),
+    ]
+
+
+class NET_DVR_DEVICEINFO_V40(Structure):
+    _fields_ = [
+        ("struDeviceV30", NET_DVR_DEVICEINFO_V30),
+        ("bySupportLock", c_ubyte),
+        ("byRetryLoginTime", c_ubyte),
+        ("byPasswordLevel", c_ubyte),
+        ("byProxyType", c_ubyte),
+        ("dwSurplusLockTime", c_uint32),
+        ("byCharEncodeType", c_ubyte),
+        ("bySupportDev5", c_ubyte),
+        ("bySupport", c_ubyte),
+        ("byLoginMode", c_ubyte),
+        ("dwOEMCode", c_uint32),
+        ("iResidualValidity", c_int),
+        ("byResidualValidity", c_ubyte),
+        ("bySingleStartDTalkChan", c_ubyte),
+        ("bySingleDTalkChanNums", c_ubyte),
+        ("byPassWordResetLevel", c_ubyte),
+        ("bySupportStreamEncrypt", c_ubyte),
+        ("byMarketType", c_ubyte),
+        ("byRes2", c_byte * 238),
+    ]
+
+
+VOICE_DATA_CALLBACK = ctypes.WINFUNCTYPE(None, c_long, c_char_p, c_uint32, c_ubyte, c_void_p)
+
+
+@dataclass(frozen=True)
+class AudioCompressInfo:
+    encode_type: int
+    sampling_rate: int
+    bit_rate: int
+    support_flag: int
+
+
+@dataclass(frozen=True)
+class DeviceSession:
+    user_id: int
+    device_info: NET_DVR_DEVICEINFO_V30
+    device_info_v40: Optional[NET_DVR_DEVICEINFO_V40] = None
+
+    @property
+    def default_voice_channel(self) -> int:
+        return self.device_info.byStartDTalkChan or 1
+
+
+class HikvisionVoiceSDK:
+    def __init__(self, sdk_root: str | os.PathLike[str] | None = None) -> None:
+        self.sdk_root = Path(sdk_root or Path(__file__).resolve().parent / "libs" / "win64").resolve()
+        self._sdk = None
+        self._initialized = False
+        self._cleanup_registered = False
+        self._lock = threading.RLock()
+        self._active_callbacks: dict[int, VOICE_DATA_CALLBACK] = {}
+
+    def initialize(self, enable_log: bool = False, log_dir: str | os.PathLike[str] | None = None) -> None:
+        with self._lock:
+            if self._initialized:
+                return
+            self._load_sdk()
+            self._configure_init_paths()
+            self._bind_functions()
+            if not self._sdk.NET_DVR_Init():
+                raise self._last_error("NET_DVR_Init failed", "NET_DVR_Init")
+            if enable_log:
+                target = Path(log_dir or Path.cwd() / "SdkLog")
+                target.mkdir(parents=True, exist_ok=True)
+                self._sdk.NET_DVR_SetLogToFile(3, str(target).encode("gbk", errors="ignore"), False)
+            self._initialized = True
+            if not self._cleanup_registered:
+                atexit.register(self.cleanup)
+                self._cleanup_registered = True
+
+    def cleanup(self) -> None:
+        with self._lock:
+            if not self._initialized or self._sdk is None:
+                return
+            self._active_callbacks.clear()
+            self._sdk.NET_DVR_Cleanup()
+            self._initialized = False
+
+    def get_last_error_info(self) -> dict[str, Optional[str | int]]:
+        code = int(self._sdk.NET_DVR_GetLastError()) if self._sdk is not None else None
+        return {
+            "error_code": code,
+            "error_message": self._get_error_message(code),
+        }
+
+    def login(self, host: str, port: int, username: str, password: str) -> DeviceSession:
+        self._require_initialized()
+        login_info = NET_DVR_USER_LOGIN_INFO()
+        login_info.sDeviceAddress = host.encode("ascii")
+        login_info.wPort = port
+        login_info.sUserName = username.encode("ascii")
+        login_info.sPassword = password.encode("ascii")
+        login_info.bUseAsynLogin = False
+        login_info.byLoginMode = 0
+
+        device_info_v40 = NET_DVR_DEVICEINFO_V40()
+        user_id = self._sdk.NET_DVR_Login_V40(byref(login_info), byref(device_info_v40))
+        if user_id < 0:
+            raise self._last_error(f"NET_DVR_Login_V40 failed for {host}:{port}", "NET_DVR_Login_V40")
+        return DeviceSession(
+            user_id=user_id,
+            device_info=device_info_v40.struDeviceV30,
+            device_info_v40=device_info_v40,
+        )
+
+    def logout(self, session: DeviceSession) -> None:
+        self._require_initialized()
+        if not self._sdk.NET_DVR_Logout(session.user_id):
+            raise self._last_error("NET_DVR_Logout failed", "NET_DVR_Logout")
+
+    def set_talk_mode(self, use_windows_api: bool = False) -> None:
+        self._require_initialized()
+        cfg = NET_DVR_LOCAL_TALK_MODE_CFG()
+        cfg.byTalkMode = TALK_MODE_WINDOWS_API if use_windows_api else TALK_MODE_LIBRARY
+        if not self._sdk.NET_DVR_SetSDKLocalCfg(NET_SDK_LOCAL_CFG_TYPE_TALK_MODE, byref(cfg)):
+            raise self._last_error("NET_DVR_SetSDKLocalCfg(TALK_MODE) failed", "NET_DVR_SetSDKLocalCfg")
+
+    def get_current_audio_compress(self, session: DeviceSession) -> AudioCompressInfo:
+        self._require_initialized()
+        compress = NET_DVR_COMPRESSION_AUDIO()
+        if not self._sdk.NET_DVR_GetCurrentAudioCompress(session.user_id, byref(compress)):
+            raise self._last_error("NET_DVR_GetCurrentAudioCompress failed", "NET_DVR_GetCurrentAudioCompress")
+        return AudioCompressInfo(
+            encode_type=compress.byAudioEncType,
+            sampling_rate=compress.byAudioSamplingRate,
+            bit_rate=compress.byAudioBitRate,
+            support_flag=compress.bySupport,
+        )
+
+    def set_audio_compress(self, session: DeviceSession, encode_type: int, sampling_rate: int = 0, bit_rate: int = 0) -> None:
+        self._require_initialized()
+        compress = NET_DVR_COMPRESSION_AUDIO()
+        compress.byAudioEncType = encode_type
+        compress.byAudioSamplingRate = sampling_rate
+        compress.byAudioBitRate = bit_rate
+        ok = self._sdk.NET_DVR_SetDVRConfig(
+            session.user_id,
+            NET_DVR_SET_COMPRESSCFG_AUD,
+            0xFFFFFFFF,
+            byref(compress),
+            ctypes.sizeof(compress),
+        )
+        if not ok:
+            raise self._last_error("NET_DVR_SetDVRConfig(VOICE) failed", "NET_DVR_SetDVRConfig")
+
+    def start_call(
+        self,
+        session: DeviceSession,
+        voice_channel: Optional[int] = None,
+        need_pcm_callback: bool = False,
+        audio_callback: Optional[Callable[[bytes, int], None]] = None,
+    ) -> "VoiceCall":
+        self._require_initialized()
+        callback = None
+        if audio_callback is not None:
+            def _handler(_handle: int, buffer: bytes, audio_flag: int) -> None:
+                audio_callback(buffer, audio_flag)
+
+            callback = _handler
+        call = VoiceCall(
+            sdk=self,
+            session=session,
+            voice_channel=voice_channel or session.default_voice_channel,
+            need_pcm_callback=need_pcm_callback,
+            audio_callback=callback,
+        )
+        call.start()
+        return call
+
+    def start_voice_forward(
+        self,
+        session: DeviceSession,
+        voice_channel: Optional[int] = None,
+        encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
+    ) -> "VoiceForwardSession":
+        self._require_initialized()
+        forward = VoiceForwardSession(
+            sdk=self,
+            session=session,
+            voice_channel=voice_channel or session.default_voice_channel,
+            encoded_audio_callback=encoded_audio_callback,
+        )
+        forward.start()
+        return forward
+
+    def _load_sdk(self) -> None:
+        if not self.sdk_root.exists():
+            raise FileNotFoundError(f"SDK path not found: {self.sdk_root}")
+        os.add_dll_directory(str(self.sdk_root))
+        com_dir = self.sdk_root / "HCNetSDKCom"
+        if com_dir.exists():
+            os.add_dll_directory(str(com_dir))
+        os.environ["PATH"] = f"{self.sdk_root};{com_dir};{os.environ.get('PATH', '')}"
+        self._sdk = ctypes.WinDLL(str(self.sdk_root / "HCNetSDK.dll"))
+
+    def _configure_init_paths(self) -> None:
+        sdk_path = NET_DVR_LOCAL_SDK_PATH()
+        com_dir = str((self.sdk_root / "HCNetSDKCom").resolve()).encode("gbk", errors="ignore")
+        sdk_path.sPath = com_dir
+        if not self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_SDK_PATH, byref(sdk_path)):
+            raise self._last_error("NET_DVR_SetSDKInitCfg(SDK_PATH) failed", "NET_DVR_SetSDKInitCfg")
+        crypto_path = str((self.sdk_root / "libcrypto-3-x64.dll").resolve()).encode("gbk", errors="ignore")
+        ssl_path = str((self.sdk_root / "libssl-3-x64.dll").resolve()).encode("gbk", errors="ignore")
+        self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_LIBEAY_PATH, c_char_p(crypto_path))
+        self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_SSLEAY_PATH, c_char_p(ssl_path))
+
+    def _bind_functions(self) -> None:
+        self._sdk.NET_DVR_Init.restype = c_bool
+        self._sdk.NET_DVR_Cleanup.restype = c_bool
+        self._sdk.NET_DVR_GetLastError.restype = c_uint32
+        self._sdk.NET_DVR_GetErrorMsg.argtypes = [POINTER(c_long)]
+        self._sdk.NET_DVR_GetErrorMsg.restype = c_char_p
+        self._sdk.NET_DVR_Login_V40.argtypes = [POINTER(NET_DVR_USER_LOGIN_INFO), POINTER(NET_DVR_DEVICEINFO_V40)]
+        self._sdk.NET_DVR_Login_V40.restype = c_long
+        self._sdk.NET_DVR_Logout.argtypes = [c_long]
+        self._sdk.NET_DVR_Logout.restype = c_bool
+        self._sdk.NET_DVR_SetSDKInitCfg.argtypes = [c_long, c_void_p]
+        self._sdk.NET_DVR_SetSDKInitCfg.restype = c_bool
+        self._sdk.NET_DVR_SetSDKLocalCfg.argtypes = [c_long, c_void_p]
+        self._sdk.NET_DVR_SetSDKLocalCfg.restype = c_bool
+        self._sdk.NET_DVR_SetLogToFile.argtypes = [c_long, c_char_p, c_bool]
+        self._sdk.NET_DVR_SetLogToFile.restype = c_bool
+        self._sdk.NET_DVR_GetCurrentAudioCompress.argtypes = [c_long, POINTER(NET_DVR_COMPRESSION_AUDIO)]
+        self._sdk.NET_DVR_GetCurrentAudioCompress.restype = c_bool
+        self._sdk.NET_DVR_SetDVRConfig.argtypes = [c_long, c_uint32, c_long, c_void_p, c_uint32]
+        self._sdk.NET_DVR_SetDVRConfig.restype = c_bool
+        self._sdk.NET_DVR_StartVoiceCom_V30.argtypes = [c_long, c_uint32, c_bool, VOICE_DATA_CALLBACK, c_void_p]
+        self._sdk.NET_DVR_StartVoiceCom_V30.restype = c_long
+        self._sdk.NET_DVR_StartVoiceCom_MR_V30.argtypes = [c_long, c_uint32, VOICE_DATA_CALLBACK, c_void_p]
+        self._sdk.NET_DVR_StartVoiceCom_MR_V30.restype = c_long
+        self._sdk.NET_DVR_StopVoiceCom.argtypes = [c_long]
+        self._sdk.NET_DVR_StopVoiceCom.restype = c_bool
+        self._sdk.NET_DVR_VoiceComSendData.argtypes = [c_long, c_char_p, c_uint32]
+        self._sdk.NET_DVR_VoiceComSendData.restype = c_bool
+
+    def _build_callback(self, callback: Optional[Callable[[int, bytes, int], None]]) -> VOICE_DATA_CALLBACK:
+        def _wrapped(voice_handle: int, recv_buffer: bytes, buf_size: int, audio_flag: int, _user: int) -> None:
+            if callback is None or not recv_buffer or buf_size == 0:
+                return
+            data = ctypes.string_at(recv_buffer, buf_size)
+            callback(voice_handle, data, audio_flag)
+
+        return VOICE_DATA_CALLBACK(_wrapped)
+
+    def _remember_callback(self, handle: int, callback: VOICE_DATA_CALLBACK) -> None:
+        self._active_callbacks[handle] = callback
+
+    def _forget_callback(self, handle: int) -> None:
+        self._active_callbacks.pop(handle, None)
+
+    def _require_initialized(self) -> None:
+        if not self._initialized or self._sdk is None:
+            raise HikvisionSDKError("SDK not initialized")
+
+    def _get_error_message(self, error_code: Optional[int] = None) -> Optional[str]:
+        if self._sdk is None:
+            return None
+        code = c_long(-1 if error_code is None else int(error_code))
+        raw = self._sdk.NET_DVR_GetErrorMsg(byref(code))
+        if not raw:
+            return None
+        try:
+            return raw.decode("gbk")
+        except UnicodeDecodeError:
+            return raw.decode("utf-8", errors="ignore")
+
+    def _last_error(self, message: str, api_name: Optional[str] = None) -> HikvisionSDKError:
+        code = int(self._sdk.NET_DVR_GetLastError()) if self._sdk is not None else None
+        return HikvisionSDKError(message, code, self._get_error_message(code), api_name)
+
+
+class VoiceCall:
+    def __init__(
+        self,
+        sdk: HikvisionVoiceSDK,
+        session: DeviceSession,
+        voice_channel: int,
+        need_pcm_callback: bool,
+        audio_callback: Optional[Callable[[int, bytes, int], None]],
+    ) -> None:
+        self.sdk = sdk
+        self.session = session
+        self.voice_channel = voice_channel
+        self.need_pcm_callback = need_pcm_callback
+        self.audio_callback = audio_callback
+        self.handle: Optional[int] = None
+
+    def start(self) -> None:
+        if self.handle is not None:
+            return
+        callback = self.sdk._build_callback(self.audio_callback)
+        handle = self.sdk._sdk.NET_DVR_StartVoiceCom_V30(
+            self.session.user_id,
+            self.voice_channel,
+            self.need_pcm_callback,
+            callback,
+            None,
+        )
+        if handle < 0:
+            raise self.sdk._last_error("NET_DVR_StartVoiceCom_V30 failed", "NET_DVR_StartVoiceCom_V30")
+        self.handle = handle
+        self.sdk._remember_callback(handle, callback)
+
+    def stop(self) -> None:
+        if self.handle is None:
+            return
+        handle = self.handle
+        self.handle = None
+        self.sdk._forget_callback(handle)
+        if not self.sdk._sdk.NET_DVR_StopVoiceCom(handle):
+            raise self.sdk._last_error("NET_DVR_StopVoiceCom failed", "NET_DVR_StopVoiceCom")
+
+    def __enter__(self) -> "VoiceCall":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.stop()
+
+
+class VoiceForwardSession:
+    def __init__(
+        self,
+        sdk: HikvisionVoiceSDK,
+        session: DeviceSession,
+        voice_channel: int,
+        encoded_audio_callback: Optional[Callable[[bytes, int], None]],
+    ) -> None:
+        self.sdk = sdk
+        self.session = session
+        self.voice_channel = voice_channel
+        self.encoded_audio_callback = encoded_audio_callback
+        self.handle: Optional[int] = None
+
+    def start(self) -> None:
+        if self.handle is not None:
+            return
+
+        def _handler(_voice_handle: int, data: bytes, audio_flag: int) -> None:
+            if self.encoded_audio_callback is not None:
+                self.encoded_audio_callback(data, audio_flag)
+
+        callback = self.sdk._build_callback(_handler)
+        handle = self.sdk._sdk.NET_DVR_StartVoiceCom_MR_V30(
+            self.session.user_id,
+            self.voice_channel,
+            callback,
+            None,
+        )
+        if handle < 0:
+            raise self.sdk._last_error("NET_DVR_StartVoiceCom_MR_V30 failed", "NET_DVR_StartVoiceCom_MR_V30")
+        self.handle = handle
+        self.sdk._remember_callback(handle, callback)
+
+    def send_encoded_audio(self, data: bytes) -> None:
+        if self.handle is None:
+            raise HikvisionSDKError("Voice forwarding session not started")
+        if not data:
+            return
+        if not self.sdk._sdk.NET_DVR_VoiceComSendData(self.handle, data, len(data)):
+            raise self.sdk._last_error("NET_DVR_VoiceComSendData failed", "NET_DVR_VoiceComSendData")
+
+    def stop(self) -> None:
+        if self.handle is None:
+            return
+        handle = self.handle
+        self.handle = None
+        self.sdk._forget_callback(handle)
+        if not self.sdk._sdk.NET_DVR_StopVoiceCom(handle):
+            raise self.sdk._last_error("NET_DVR_StopVoiceCom failed", "NET_DVR_StopVoiceCom")
+
+    def __enter__(self) -> "VoiceForwardSession":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.stop()
+
+
+if __name__ =="__main__":
+    sdk=HikvisionVoiceSDK()
+    sdk.login("10.41.203.51", 80, "admin", "abcd1234")
