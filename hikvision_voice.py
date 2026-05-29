@@ -358,7 +358,7 @@ class HikvisionVoiceSDK:
     def start_stream_record(
         self,
         session: DeviceSession,
-        file_path: str | os.PathLike[str],
+        file_path: str | os.PathLike[str] | None = None,
         channel: Optional[int] = None,
         stream_type: int = STREAM_TYPE_MAIN,
         link_mode: int = LINK_MODE_TCP,
@@ -366,11 +366,12 @@ class HikvisionVoiceSDK:
         real_data_callback: Optional[Callable[[int, int, bytes], None]] = None,
     ) -> "StreamRecorder":
         self._require_initialized()
+        target_channel = channel or session.default_preview_channel
         recorder = StreamRecorder(
             sdk=self,
             session=session,
-            file_path=Path(file_path),
-            channel=channel or session.default_preview_channel,
+            file_path=Path(file_path) if file_path is not None else self._default_stream_record_path(session.host, target_channel),
+            channel=target_channel,
             stream_type=stream_type,
             link_mode=link_mode,
             blocked=blocked,
@@ -460,6 +461,11 @@ class HikvisionVoiceSDK:
             callback(real_handle, data_type, data)
 
         return REAL_DATA_CALLBACK(_wrapped)
+
+    def _default_stream_record_path(self, host: str, channel: int) -> Path:
+        host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return Path.cwd() / "recordings" / "streams" / host_dir / f"stream_ch{channel}_{timestamp}.mp4"
 
     def _require_initialized(self) -> None:
         if not self._initialized or self._sdk is None:

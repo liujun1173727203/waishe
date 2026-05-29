@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from hikvision_voice import HikvisionSDKError, HikvisionVoiceSDK
@@ -29,19 +28,15 @@ def main() -> int:
         session = sdk.login(args.host, args.port, args.username, args.password)
 
         channel = args.channel or session.default_preview_channel
-        output_path = Path(args.output) if args.output else (
-            Path("recordings")
-            / "streams"
-            / args.host
-            / f"stream_ch{channel}_{datetime.now():%Y%m%d_%H%M%S}.mp4"
-        )
+        output_path = Path(args.output) if args.output else None
 
         recorder = sdk.start_stream_record(
             session=session,
             file_path=output_path,
             channel=channel,
         )
-        print(f"recording started: channel={channel} output={output_path}")
+        actual_output = recorder.file_path
+        print(f"recording started: channel={channel} output={actual_output}")
         time.sleep(args.duration)
         print("recording finished")
     except HikvisionSDKError as exc:
