@@ -4,6 +4,7 @@ import atexit
 import ctypes
 import os
 import threading
+from datetime import datetime
 from ctypes import POINTER, Structure, byref, c_bool, c_byte, c_char, c_char_p, c_int, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
 from dataclasses import dataclass
 from pathlib import Path
@@ -516,4 +517,4 @@ class VoiceForwardSession:
 if __name__ =="__main__":
     sdk=HikvisionVoiceSDK()
     sdk.initialize(enable_log=True)
-    sdk.login("10.41.203.51", 80, "admin", "abcd1234")
+    sdk.login("10.41.203.51", 8000, "admin", "abcd1234")

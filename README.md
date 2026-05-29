@@ -24,7 +24,7 @@
 ```powershell
 python .\demo_voice_call.py `
   --host 192.168.1.64 `
-  --port 80 `
+  --port 8000 `
   --username admin `
   --password 12345
 ```
@@ -48,7 +48,7 @@ sdk = HikvisionVoiceSDK()
 sdk.initialize()
 sdk.set_talk_mode(use_windows_api=False)
 
-session = sdk.login("192.168.1.64", 80, "admin", "12345")
+session = sdk.login("192.168.1.64", 8000, "admin", "12345")
 call = sdk.start_call(session)
 
 input("语音通话中，回车结束...")

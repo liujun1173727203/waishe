@@ -10,7 +10,7 @@ from hikvision_voice import AUDIO_FLAG_LOCAL, HikvisionSDKError, HikvisionVoiceS
 def main() -> int:
     parser = argparse.ArgumentParser(description="PC <-> Hikvision device voice talk demo")
     parser.add_argument("--host", required=True, help="device ip or hostname")
-    parser.add_argument("--port", type=int, default=80, help="sdk port, default 80")
+    parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
     parser.add_argument("--username", required=True, help="device username")
     parser.add_argument("--password", required=True, help="device password")
     parser.add_argument("--voice-channel", type=int, default=0, help="voice talk channel, 0 means auto")
@@ -47,7 +47,10 @@ def main() -> int:
             need_pcm_callback=args.pcm_callback,
             audio_callback=on_audio,
         )
-        print(f"voice talk started on channel {voice_channel}, press Ctrl+C to stop")
+        print(
+            f"voice talk started on channel {voice_channel}, "
+            f"recording device audio to recordings/{args.host}/, press Ctrl+C to stop"
+        )
 
         while True:
             time.sleep(1)
