@@ -226,6 +226,9 @@ class AudioCompressInfo:
 class DeviceSession:
     user_id: int
     host: str
+    port: int
+    username: str
+    password: str
     device_info: NET_DVR_DEVICEINFO_V30
     device_info_v40: Optional[NET_DVR_DEVICEINFO_V40] = None
 
@@ -297,6 +300,9 @@ class HikvisionVoiceSDK:
         return DeviceSession(
             user_id=user_id,
             host=host,
+            port=port,
+            username=username,
+            password=password,
             device_info=device_info_v40.struDeviceV30,
             device_info_v40=device_info_v40,
         )

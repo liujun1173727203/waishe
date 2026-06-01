@@ -11,12 +11,13 @@ from video_analysis import RecordedVideoAnalyzer, VideoAnalysisError
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Speaker test use case with composite stream recording and audio matching")
-    parser.add_argument("--host", required=True, help="device ip or hostname")
+    parser.add_argument("--host", default="10.41.203.51", help="device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
-    parser.add_argument("--username", required=True, help="device username")
-    parser.add_argument("--password", required=True, help="device password")
-    parser.add_argument("--record-channel", type=int, default=0, help="record channel, 0 means auto")
-    parser.add_argument("--voice-channel", type=int, default=0, help="voice talk channel, 0 means auto")
+    parser.add_argument("--isapi-port", type=int, default=80, help="isapi http port, default 80")
+    parser.add_argument("--username", default="admin", help="device username")
+    parser.add_argument("--password", default="abcd1234", help="device password")
+    parser.add_argument("--voice-channel", type=int, default=1, help="voice talk channel, 0 means auto")
+    parser.add_argument("--record-channel", type=int, default=1, help="record channel, 0 means auto")
     parser.add_argument("--record-duration", type=int, default=10, help="record duration in seconds")
     parser.add_argument("--send-duration", type=int, default=3, help="generated audio duration in seconds")
     parser.add_argument("--similarity-threshold", type=float, default=0.8, help="match threshold, default 0.8")
@@ -26,7 +27,7 @@ def main() -> int:
     args = parser.parse_args()
 
     sdk = HikvisionVoiceSDK()
-    isapi = HikvisionIsapiClient(sdk)
+    isapi = HikvisionIsapiClient(sdk, port=args.isapi_port)
     use_cases = SpeakerTestUseCases(
         sdk=sdk,
         isapi=isapi,

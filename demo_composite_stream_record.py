@@ -13,6 +13,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Hikvision composite stream record demo")
     parser.add_argument("--host", required=True, help="device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
+    parser.add_argument("--isapi-port", type=int, default=80, help="isapi http port, default 80")
     parser.add_argument("--username", required=True, help="device username")
     parser.add_argument("--password", required=True, help="device password")
     parser.add_argument("--channel", type=int, default=0, help="preview channel, 0 means auto")
@@ -22,7 +23,7 @@ def main() -> int:
     args = parser.parse_args()
 
     sdk = HikvisionVoiceSDK()
-    isapi = HikvisionIsapiClient(sdk)
+    isapi = HikvisionIsapiClient(sdk, port=args.isapi_port)
     session = None
     recorder = None
     try:

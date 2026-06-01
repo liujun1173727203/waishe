@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import re
+import secrets
+import urllib.error
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Optional
 
-from hikvision_voice import DeviceSession, HikvisionVoiceSDK, STREAM_TYPE_MAIN
+from hikvision_voice import DeviceSession, HikvisionSDKError, HikvisionVoiceSDK, STREAM_TYPE_MAIN
 
 
 ISAPI_SCHEMA = "http://www.isapi.org/ver20/XMLSchema"
+_AUTH_PARAM_RE = re.compile(r'(\w+)=("([^"]*)"|[^,]+)')
 
 
 def _local_name(tag: str) -> str:
@@ -26,6 +33,19 @@ def _child_tag_like(node: ET.Element, local_name: str) -> str:
         namespace = node.tag.split("}", 1)[0][1:]
         return f"{{{namespace}}}{local_name}"
     return local_name
+
+
+def _parse_www_authenticate(header_value: str) -> dict[str, str]:
+    if not header_value.lower().startswith("digest "):
+        raise HikvisionSDKError("unsupported www-authenticate scheme", error_message=header_value)
+
+    challenge = header_value[7:]
+    parsed: dict[str, str] = {}
+    for match in _AUTH_PARAM_RE.finditer(challenge):
+        key = match.group(1)
+        value = match.group(3) if match.group(3) is not None else match.group(2)
+        parsed[key] = value.strip().strip('"')
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -58,8 +78,19 @@ class AudioInputCapabilityStatus:
 
 
 class HikvisionIsapiClient:
-    def __init__(self, sdk: HikvisionVoiceSDK) -> None:
+    def __init__(
+        self,
+        sdk: HikvisionVoiceSDK | None = None,
+        *,
+        port: int = 80,
+        scheme: str = "http",
+        timeout_seconds: float = 5.0,
+    ) -> None:
         self.sdk = sdk
+        self.port = port
+        self.scheme = scheme
+        self.timeout_seconds = timeout_seconds
+        self._nonce_count = 0
 
     def stream_type_to_track_suffix(self, stream_type: int) -> int:
         mapping = {
@@ -79,16 +110,10 @@ class HikvisionIsapiClient:
     ) -> str:
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
-        xml_text, _ = self.sdk.stdxml_config(
-            session,
-            "GET",
-            f"/ISAPI/Streaming/channels/{track_stream_id}/capabilities",
-        )
-        return xml_text
+        return self._request_text(session, "GET", f"/ISAPI/Streaming/channels/{track_stream_id}/capabilities")
 
     def get_audio_capabilities(self, session: DeviceSession) -> str:
-        xml_text, _ = self.sdk.stdxml_config(session, "GET", "/ISAPI/System/Audio/capabilities")
-        return xml_text
+        return self._request_text(session, "GET", "/ISAPI/System/Audio/capabilities")
 
     def get_audio_input_capability_status(self, session: DeviceSession) -> AudioInputCapabilityStatus:
         candidate_paths = [
@@ -116,12 +141,7 @@ class HikvisionIsapiClient:
     ) -> str:
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
-        xml_text, _ = self.sdk.stdxml_config(
-            session,
-            "GET",
-            f"/ISAPI/Streaming/channels/{track_stream_id}",
-        )
-        return xml_text
+        return self._request_text(session, "GET", f"/ISAPI/Streaming/channels/{track_stream_id}")
 
     def set_streaming_channel_config(
         self,
@@ -132,13 +152,12 @@ class HikvisionIsapiClient:
     ) -> str:
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
-        _, status_text = self.sdk.stdxml_config(
+        return self._request_text(
             session,
             "PUT",
             f"/ISAPI/Streaming/channels/{track_stream_id}",
             body=xml_body,
         )
-        return status_text
 
     def ensure_composite_stream_recording_enabled(
         self,
@@ -149,17 +168,11 @@ class HikvisionIsapiClient:
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
 
-        # Check capability XML first so unsupported devices are not configured blindly.
         capabilities_xml = self.get_streaming_channel_capabilities(session, target_channel, stream_type)
         cap_root = ET.fromstring(capabilities_xml)
         audio_cap_node = _find_first_by_local_name(cap_root, "Audio")
         if audio_cap_node is None:
-            return CompositeStreamStatus(
-                supported=False,
-                track_stream_id=track_stream_id,
-                audio_enabled=False,
-                changed=False,
-            )
+            return CompositeStreamStatus(False, track_stream_id, False, False)
 
         config_xml = self.get_streaming_channel_config(session, target_channel, stream_type)
         config_root = ET.fromstring(config_xml)
@@ -167,7 +180,6 @@ class HikvisionIsapiClient:
         if audio_node is None:
             audio_node = ET.SubElement(config_root, _child_tag_like(config_root, "Audio"))
 
-        # Firmware variants may use either enable or enabled for the same flag.
         enabled_node = _find_first_by_local_name(audio_node, "enabled")
         if enabled_node is None:
             enabled_node = _find_first_by_local_name(audio_node, "enable")
@@ -176,22 +188,12 @@ class HikvisionIsapiClient:
 
         current_value = (enabled_node.text or "").strip().lower()
         if current_value in {"true", "1"}:
-            return CompositeStreamStatus(
-                supported=True,
-                track_stream_id=track_stream_id,
-                audio_enabled=True,
-                changed=False,
-            )
+            return CompositeStreamStatus(True, track_stream_id, True, False)
 
         enabled_node.text = "true"
         xml_body = ET.tostring(config_root, encoding="utf-8", xml_declaration=True).decode("utf-8")
         self.set_streaming_channel_config(session, xml_body, target_channel, stream_type)
-        return CompositeStreamStatus(
-            supported=True,
-            track_stream_id=track_stream_id,
-            audio_enabled=True,
-            changed=True,
-        )
+        return CompositeStreamStatus(True, track_stream_id, True, True)
 
     def set_audio_input_volume_to_max(self, session: DeviceSession, channel: int = 1) -> AudioVolumeStatus:
         return self._set_audio_volume_to_max(
@@ -237,7 +239,6 @@ class HikvisionIsapiClient:
         config_paths: list[str],
         capability_paths: list[str],
     ) -> AudioVolumeStatus:
-        # Try multiple candidate paths because audio config endpoints vary by model.
         config_path, config_root = self._get_first_xml(session, config_paths)
         if config_root is None or config_path is None:
             return AudioVolumeStatus(False, False, 0, 0, "")
@@ -246,7 +247,6 @@ class HikvisionIsapiClient:
         if volume_node is None:
             return AudioVolumeStatus(False, False, 0, 0, config_path)
 
-        # Prefer max from capabilities, then from the config node, then fall back to 15.
         max_value = self._find_volume_max(session, capability_paths) or self._max_from_node(volume_node) or 15
         current_value = self._safe_int(volume_node.text)
         if current_value is None:
@@ -256,16 +256,15 @@ class HikvisionIsapiClient:
 
         volume_node.text = str(max_value)
         xml_body = ET.tostring(config_root, encoding="utf-8", xml_declaration=True).decode("utf-8")
-        self.sdk.stdxml_config(session, "PUT", config_path, body=xml_body)
+        self._request_text(session, "PUT", config_path, body=xml_body)
         return AudioVolumeStatus(True, True, max_value, max_value, config_path)
 
     def _get_first_xml(self, session: DeviceSession, paths: list[str]) -> tuple[Optional[str], Optional[ET.Element]]:
         for path in paths:
             try:
-                xml_text, _ = self.sdk.stdxml_config(session, "GET", path)
+                xml_text = self._request_text(session, "GET", path)
                 return path, ET.fromstring(xml_text)
             except Exception:
-                # Keep probing fallback paths until one works on the current device model.
                 continue
         return None, None
 
@@ -305,3 +304,146 @@ class HikvisionIsapiClient:
             return int(str(value).strip())
         except (TypeError, ValueError):
             return None
+
+    def _request_text(
+        self,
+        session: DeviceSession,
+        method: str,
+        path: str,
+        body: str | None = None,
+    ) -> str:
+        response_body, _headers = self._request(session, method, path, body)
+        return response_body.decode("utf-8", errors="ignore")
+
+    def _request(
+        self,
+        session: DeviceSession,
+        method: str,
+        path: str,
+        body: str | None = None,
+    ) -> tuple[bytes, dict[str, str]]:
+        url = self._build_url(session, path)
+        payload = body.encode("utf-8") if body is not None else None
+        headers = {
+            "Accept": "application/xml,text/xml,*/*",
+        }
+        if body is not None:
+            headers["Content-Type"] = "application/xml; charset=utf-8"
+
+        request = urllib.request.Request(url=url, data=payload, method=method.upper(), headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                return response.read(), dict(response.headers.items())
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401:
+                raise self._http_error(exc, method, path)
+            challenge = exc.headers.get("WWW-Authenticate", "")
+            auth_header = self._build_digest_authorization(
+                session=session,
+                method=method.upper(),
+                request_uri=path,
+                challenge_header=challenge,
+            )
+            retry_headers = dict(headers)
+            retry_headers["Authorization"] = auth_header
+            retry_request = urllib.request.Request(url=url, data=payload, method=method.upper(), headers=retry_headers)
+            try:
+                with urllib.request.urlopen(retry_request, timeout=self.timeout_seconds) as response:
+                    return response.read(), dict(response.headers.items())
+            except urllib.error.HTTPError as retry_exc:
+                raise self._http_error(retry_exc, method, path)
+            except urllib.error.URLError as retry_exc:
+                raise HikvisionSDKError(
+                    f"isapi request failed for {method.upper()} {path}",
+                    api_name=f"{method.upper()} {path}",
+                    error_message=str(retry_exc.reason),
+                ) from retry_exc
+        except urllib.error.URLError as exc:
+            raise HikvisionSDKError(
+                f"isapi request failed for {method.upper()} {path}",
+                api_name=f"{method.upper()} {path}",
+                error_message=str(exc.reason),
+            ) from exc
+
+    def _build_digest_authorization(
+        self,
+        session: DeviceSession,
+        method: str,
+        request_uri: str,
+        challenge_header: str,
+    ) -> str:
+        params = _parse_www_authenticate(challenge_header)
+        realm = params.get("realm")
+        nonce = params.get("nonce")
+        qop = params.get("qop")
+        algorithm = params.get("algorithm", "MD5")
+        opaque = params.get("opaque")
+
+        if not realm or not nonce:
+            raise HikvisionSDKError("invalid digest auth challenge", error_message=challenge_header)
+        if algorithm.upper() != "MD5":
+            raise HikvisionSDKError("unsupported digest algorithm", error_message=algorithm)
+
+        qop_value = None
+        if qop:
+            qop_candidates = [item.strip() for item in qop.split(",")]
+            if "auth" in qop_candidates:
+                qop_value = "auth"
+            elif qop_candidates:
+                qop_value = qop_candidates[0]
+
+        nc = self._next_nonce_count()
+        cnonce = secrets.token_hex(8)
+
+        ha1 = self._md5_hex(f"{session.username}:{realm}:{session.password}")
+        ha2 = self._md5_hex(f"{method}:{request_uri}")
+        if qop_value:
+            response = self._md5_hex(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop_value}:{ha2}")
+        else:
+            response = self._md5_hex(f"{ha1}:{nonce}:{ha2}")
+
+        values = [
+            f'username="{session.username}"',
+            f'realm="{realm}"',
+            f'nonce="{nonce}"',
+            f'uri="{request_uri}"',
+            f'response="{response}"',
+            f'algorithm="{algorithm}"',
+        ]
+        if opaque:
+            values.append(f'opaque="{opaque}"')
+        if qop_value:
+            values.extend(
+                [
+                    f"qop={qop_value}",
+                    f"nc={nc}",
+                    f'cnonce="{cnonce}"',
+                ]
+            )
+        return "Digest " + ", ".join(values)
+
+    def _next_nonce_count(self) -> str:
+        self._nonce_count += 1
+        return f"{self._nonce_count:08x}"
+
+    def _md5_hex(self, value: str) -> str:
+        return hashlib.md5(value.encode("utf-8")).hexdigest()
+
+    def _build_url(self, session: DeviceSession, path: str) -> str:
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        host = session.host
+        port = self.port
+        netloc = host if (self.scheme == "http" and port == 80) or (self.scheme == "https" and port == 443) else f"{host}:{port}"
+        return urllib.parse.urlunsplit((self.scheme, netloc, normalized_path, "", ""))
+
+    def _http_error(self, error: urllib.error.HTTPError, method: str, path: str) -> HikvisionSDKError:
+        try:
+            detail = error.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail = str(error)
+        return HikvisionSDKError(
+            f"isapi request failed for {method.upper()} {path}",
+            error_code=error.code,
+            error_message=detail or error.reason,
+            api_name=f"{method.upper()} {path}",
+        )
