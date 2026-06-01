@@ -60,6 +60,19 @@ class AudioInputCapabilityStatus:
     request_path: str
 
 
+@dataclass(frozen=True)
+class TwoWayAudioChannelStatus:
+    supported: bool
+    changed: bool
+    capability_path: str
+    config_path: str
+    output_type: str
+    output_type_is_speaker: bool
+    speaker_supported: bool
+    microphone_volume: int
+    microphone_volume_max: int
+
+
 class HikvisionIsapiClient:
     def __init__(
         self,
@@ -96,26 +109,81 @@ class HikvisionIsapiClient:
         return self._request_text(session, "GET", "/ISAPI/System/Audio/capabilities")
 
     def get_audio_input_capability_status(self, session: DeviceSession) -> AudioInputCapabilityStatus:
-        candidate_paths = [
-            "/ISAPI/System/Audio/capabilities",
-            "/ISAPI/System/TwoWayAudio/channels/1/capabilities",
-        ]
-        path, root = self._get_first_xml(session, candidate_paths)
-        if path is None or root is None:
-            return AudioInputCapabilityStatus(supported=False, request_path="")
+        status = self.get_two_way_audio_channel_status(session)
+        return AudioInputCapabilityStatus(
+            supported=status.supported,
+            request_path=status.capability_path,
+        )
 
-        for node in root.iter():
-            local_name = _local_name(node.tag).lower()
-            if local_name in {"audioin", "audioinput", "twowayaudiochannel", "audiochannel"}:
-                return AudioInputCapabilityStatus(supported=True, request_path=path)
-            if local_name in {"audioinputsupport", "supportaudioinput", "issupportdeviceaudiocapture"}:
-                value = (node.text or "").strip().lower()
-                return AudioInputCapabilityStatus(supported=value in {"true", "1"}, request_path=path)
-            if local_name == "audioinputnums":
-                value = self._safe_int(node.text)
-                if value is not None:
-                    return AudioInputCapabilityStatus(supported=value > 0, request_path=path)
-        return AudioInputCapabilityStatus(supported=False, request_path=path)
+    def get_two_way_audio_channel_status(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> TwoWayAudioChannelStatus:
+        capability_path = "/ISAPI/System/TwoWayAudio/channels/capabilities"
+        config_path = f"/ISAPI/System/TwoWayAudio/channels/{channel}"
+        capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
+        capability_channel = self._first_twoway_channel(capability_root)
+        if capability_channel is None:
+            return TwoWayAudioChannelStatus(False, False, capability_path, config_path, "", False, False, 0, 0)
+
+        output_type_node = _find_first_by_local_name(capability_channel, "audioOutputType")
+        microphone_volume_node = _find_first_by_local_name(capability_channel, "microphoneVolume")
+        speaker_supported = self._node_supports_option(output_type_node, "Speaker")
+        output_type = (output_type_node.text or "").strip() if output_type_node is not None and output_type_node.text else ""
+        microphone_volume = self._safe_int(microphone_volume_node.text if microphone_volume_node is not None else None) or 0
+        microphone_volume_max = self._max_from_node(microphone_volume_node) or 0
+
+        return TwoWayAudioChannelStatus(
+            supported=speaker_supported,
+            changed=False,
+            capability_path=capability_path,
+            config_path=config_path,
+            output_type=output_type,
+            output_type_is_speaker=output_type == "Speaker",
+            speaker_supported=speaker_supported,
+            microphone_volume=microphone_volume,
+            microphone_volume_max=microphone_volume_max,
+        )
+
+    def ensure_two_way_audio_speaker_ready(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> TwoWayAudioChannelStatus:
+        status = self.get_two_way_audio_channel_status(session, channel=channel)
+        if not status.supported:
+            return status
+
+        microphone_at_max = status.microphone_volume_max > 0 and status.microphone_volume >= status.microphone_volume_max
+        if status.output_type_is_speaker and microphone_at_max:
+            return status
+
+        config_path = status.config_path
+        config_root = ET.fromstring(self._request_text(session, "GET", config_path))
+        channel_root = self._first_twoway_channel(config_root) or config_root
+
+        self._set_or_create_text(channel_root, "id", str(channel))
+        self._set_or_create_text(channel_root, "enabled", "true")
+        self._set_or_create_text(channel_root, "audioOutputType", "Speaker")
+        if status.microphone_volume_max > 0:
+            self._set_or_create_text(channel_root, "microphoneVolume", str(status.microphone_volume_max))
+
+        xml_body = ET.tostring(config_root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+        self._request_text(session, "PUT", config_path, body=xml_body)
+
+        refreshed = self.get_two_way_audio_channel_status(session, channel=channel)
+        return TwoWayAudioChannelStatus(
+            supported=refreshed.supported,
+            changed=True,
+            capability_path=refreshed.capability_path,
+            config_path=refreshed.config_path,
+            output_type=refreshed.output_type,
+            output_type_is_speaker=refreshed.output_type_is_speaker,
+            speaker_supported=refreshed.speaker_supported,
+            microphone_volume=refreshed.microphone_volume,
+            microphone_volume_max=refreshed.microphone_volume_max,
+        )
 
     def get_streaming_channel_config(
         self,
@@ -278,7 +346,28 @@ class HikvisionIsapiClient:
                 return node
         return None
 
+    def _first_twoway_channel(self, root: ET.Element) -> Optional[ET.Element]:
+        for node in root.iter():
+            if _local_name(node.tag) == "TwoWayAudioChannel":
+                return node
+        return None
+
+    def _node_supports_option(self, node: Optional[ET.Element], expected_option: str) -> bool:
+        if node is None:
+            return False
+        options = node.attrib.get("opt", "")
+        return expected_option in {item.strip() for item in options.split(",") if item.strip()}
+
+    def _set_or_create_text(self, root: ET.Element, local_name: str, value: str) -> ET.Element:
+        node = _find_first_by_local_name(root, local_name)
+        if node is None:
+            node = ET.SubElement(root, _child_tag_like(root, local_name))
+        node.text = value
+        return node
+
     def _max_from_node(self, node: ET.Element) -> Optional[int]:
+        if node is None:
+            return None
         return self._safe_int(node.attrib.get("max"))
 
     def _safe_int(self, value: Optional[str]) -> Optional[int]:

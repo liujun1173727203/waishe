@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 import time
 import wave
@@ -22,6 +23,19 @@ FRAME_MS = 20
 SAMPLES_PER_FRAME = SAMPLE_RATE_8K * FRAME_MS // 1000
 PCM_BYTES_PER_FRAME = SAMPLES_PER_FRAME * SAMPLE_WIDTH_BYTES
 
+DIGIT_TONE_MAP = {
+    "0": (941.0, 1336.0),
+    "1": (697.0, 1209.0),
+    "2": (697.0, 1336.0),
+    "3": (697.0, 1477.0),
+    "4": (770.0, 1209.0),
+    "5": (770.0, 1336.0),
+    "6": (770.0, 1477.0),
+    "7": (852.0, 1209.0),
+    "8": (852.0, 1336.0),
+    "9": (852.0, 1477.0),
+}
+
 
 @dataclass(frozen=True)
 class RandomAudioTalkResult:
@@ -29,6 +43,7 @@ class RandomAudioTalkResult:
     duration_seconds: int
     encode_type: int
     voice_channel: int
+    digit_sequence: str
     bytes_sent: int
     frames_sent: int
 
@@ -39,6 +54,7 @@ class PreparedRandomAudio:
     duration_seconds: int
     encode_type: int
     voice_channel: int
+    digit_sequence: str
     pcm_bytes: bytes
     encoded_bytes: bytes
     frame_count: int
@@ -73,7 +89,7 @@ class VoiceTalkUseCases:
 
         target_channel = voice_channel or session.default_voice_channel
         wav_path = self._build_output_path(session.host, output_dir)
-        pcm_bytes = self._generate_random_pcm_wav(
+        pcm_bytes, digit_sequence = self._generate_digit_pcm_wav(
             file_path=wav_path,
             duration_seconds=duration_seconds,
             amplitude_ratio=amplitude_ratio,
@@ -87,6 +103,7 @@ class VoiceTalkUseCases:
             duration_seconds=duration_seconds,
             encode_type=compress.encode_type,
             voice_channel=target_channel,
+            digit_sequence=digit_sequence,
             pcm_bytes=pcm_bytes,
             encoded_bytes=encoded_bytes,
             frame_count=len(frames),
@@ -117,6 +134,7 @@ class VoiceTalkUseCases:
             duration_seconds=prepared_audio.duration_seconds,
             encode_type=prepared_audio.encode_type,
             voice_channel=prepared_audio.voice_channel,
+            digit_sequence=prepared_audio.digit_sequence,
             bytes_sent=bytes_sent,
             frames_sent=frames_sent,
         )
@@ -156,23 +174,31 @@ class VoiceTalkUseCases:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return base_dir / f"{prefix}_{timestamp}.wav"
 
-    def _generate_random_pcm_wav(
+    def _generate_digit_pcm_wav(
         self,
         file_path: Path,
         duration_seconds: int,
         amplitude_ratio: float,
         seed: Optional[int],
-    ) -> bytes:
+    ) -> tuple[bytes, str]:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         generator = random.Random(seed)
+        digit_sequence = "".join(generator.choice("0123456789") for _ in range(3))
         amplitude = int(32767 * amplitude_ratio)
         sample_count = SAMPLE_RATE_8K * duration_seconds
+        pcm_samples = [0] * sample_count
+        digit_sample_count = max(1, int(sample_count * 0.22))
+        gap_sample_count = max(1, int(sample_count * 0.06))
+        cursor = max(0, (sample_count - (digit_sample_count * len(digit_sequence) + gap_sample_count * (len(digit_sequence) - 1))) // 2)
 
-        pcm_chunks: list[bytes] = []
-        for _ in range(sample_count):
-            sample = generator.randint(-amplitude, amplitude)
-            pcm_chunks.append(int(sample).to_bytes(2, byteorder="little", signed=True))
-        pcm_bytes = b"".join(pcm_chunks)
+        for digit in digit_sequence:
+            tone = self._build_digit_tone_samples(digit, digit_sample_count, amplitude)
+            end = min(sample_count, cursor + len(tone))
+            for index in range(cursor, end):
+                pcm_samples[index] = tone[index - cursor]
+            cursor = min(sample_count, end + gap_sample_count)
+
+        pcm_bytes = b"".join(int(sample).to_bytes(2, byteorder="little", signed=True) for sample in pcm_samples)
 
         with wave.open(str(file_path), "wb") as wav_file:
             wav_file.setnchannels(CHANNELS_MONO)
@@ -180,7 +206,25 @@ class VoiceTalkUseCases:
             wav_file.setframerate(SAMPLE_RATE_8K)
             wav_file.writeframes(pcm_bytes)
 
-        return pcm_bytes
+        return pcm_bytes, digit_sequence
+
+    def _build_digit_tone_samples(self, digit: str, sample_count: int, amplitude: int) -> list[int]:
+        low_freq, high_freq = DIGIT_TONE_MAP[digit]
+        samples: list[int] = []
+        fade_samples = max(1, min(sample_count // 8, SAMPLE_RATE_8K // 100))
+        for index in range(sample_count):
+            t = index / SAMPLE_RATE_8K
+            envelope = 1.0
+            if index < fade_samples:
+                envelope = index / fade_samples
+            elif index >= sample_count - fade_samples:
+                envelope = (sample_count - index - 1) / fade_samples
+            mixed = 0.5 * (
+                math.sin(2.0 * math.pi * low_freq * t) +
+                math.sin(2.0 * math.pi * high_freq * t)
+            )
+            samples.append(int(amplitude * envelope * mixed))
+        return samples
 
     def _encode_pcm_for_device(self, pcm_bytes: bytes, encode_type: int) -> bytes:
         if encode_type == PCM:

@@ -15,8 +15,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
     parser.add_argument("--username", default="admin", help="device username")
     parser.add_argument("--password", default="abcd1234", help="device password")
-    parser.add_argument("--voice-channel", type=int, default=1, help="voice talk channel, 0 means auto")
-    parser.add_argument("--record-channel", type=int, default=1, help="record channel, 0 means auto")
+    parser.add_argument("--voice-channel", type=int, default=2, help="voice talk channel, 0 means auto")
+    parser.add_argument("--record-channel", type=int, default=2, help="record channel, 0 means auto")
     parser.add_argument("--record-duration", type=int, default=10, help="record duration in seconds")
     parser.add_argument("--send-duration", type=int, default=3, help="generated audio duration in seconds")
     parser.add_argument("--similarity-threshold", type=float, default=0.8, help="match threshold, default 0.8")
@@ -53,8 +53,9 @@ def main() -> int:
             f"record={result.record_file_path}",
             f"reference={result.reference_audio_path}",
             f"audio_input_supported={result.audio_input_status.supported}",
-            f"input_volume={result.volume_status.input_status.value}/{result.volume_status.input_status.maximum}",
-            f"output_volume={result.volume_status.output_status.value}/{result.volume_status.output_status.maximum}",
+            f"audio_output_type={result.two_way_audio_status.output_type}",
+            f"microphone_volume={result.two_way_audio_status.microphone_volume}/{result.two_way_audio_status.microphone_volume_max}",
+            f"digit_sequence={result.talk_result.digit_sequence}",
             f"has_sound={result.sound_result.has_sound}",
             f"match={result.match_result.matched}",
             f"score={result.match_result.best_score:.4f}",

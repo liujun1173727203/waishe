@@ -694,6 +694,9 @@ class StreamRecorder:
         self.real_data_callback = real_data_callback
         self.handle: Optional[int] = None
         self._saving = False
+        self._received_bytes = 0
+        self._received_packets = 0
+        self._first_data_event = threading.Event()
 
     def start(self) -> None:
         if self.handle is not None:
@@ -708,7 +711,15 @@ class StreamRecorder:
         preview_info.bBlocked = bool(self.blocked)
         preview_info.bPassbackRecord = False
 
-        callback = self.sdk._build_real_data_callback(self.real_data_callback)
+        def _handle_real_data(real_handle: int, data_type: int, data: bytes) -> None:
+            if data:
+                self._received_bytes += len(data)
+                self._received_packets += 1
+                self._first_data_event.set()
+            if self.real_data_callback is not None:
+                self.real_data_callback(real_handle, data_type, data)
+
+        callback = self.sdk._build_real_data_callback(_handle_real_data)
         handle = self.sdk._sdk.NET_DVR_RealPlay_V40(
             self.session.user_id,
             byref(preview_info),
@@ -746,6 +757,19 @@ class StreamRecorder:
 
         if errors:
             raise errors[0]
+
+    @property
+    def received_bytes(self) -> int:
+        return self._received_bytes
+
+    @property
+    def file_size_bytes(self) -> int:
+        if not self.file_path.exists():
+            return 0
+        return self.file_path.stat().st_size
+
+    def wait_for_first_data(self, timeout_seconds: float = 5.0) -> bool:
+        return self._first_data_event.wait(timeout_seconds)
 
     def __enter__(self) -> "StreamRecorder":
         self.start()
