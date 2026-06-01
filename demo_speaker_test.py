@@ -13,7 +13,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Speaker test use case with composite stream recording and audio matching")
     parser.add_argument("--host", default="10.41.203.51", help="device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
-    parser.add_argument("--isapi-port", type=int, default=80, help="isapi http port, default 80")
     parser.add_argument("--username", default="admin", help="device username")
     parser.add_argument("--password", default="abcd1234", help="device password")
     parser.add_argument("--voice-channel", type=int, default=1, help="voice talk channel, 0 means auto")
@@ -27,7 +26,7 @@ def main() -> int:
     args = parser.parse_args()
 
     sdk = HikvisionVoiceSDK()
-    isapi = HikvisionIsapiClient(sdk, port=args.isapi_port)
+    isapi = HikvisionIsapiClient(sdk)
     use_cases = SpeakerTestUseCases(
         sdk=sdk,
         isapi=isapi,
