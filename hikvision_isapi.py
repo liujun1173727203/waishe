@@ -31,6 +31,12 @@ def _child_tag_like(node: ET.Element, local_name: str) -> str:
     return local_name
 
 
+def _namespace_of(node: ET.Element) -> Optional[str]:
+    if node.tag.startswith("{"):
+        return node.tag.split("}", 1)[0][1:]
+    return None
+
+
 @dataclass(frozen=True)
 class CompositeStreamStatus:
     supported: bool
@@ -66,9 +72,15 @@ class TwoWayAudioChannelStatus:
     changed: bool
     capability_path: str
     config_path: str
+    enabled: bool
+    input_type: str
+    input_type_is_micin: bool
+    micin_supported: bool
     output_type: str
     output_type_is_speaker: bool
     speaker_supported: bool
+    speaker_volume: int
+    speaker_volume_max: int
     microphone_volume: int
     microphone_volume_max: int
 
@@ -105,86 +117,6 @@ class HikvisionIsapiClient:
         track_stream_id = self.track_stream_id(target_channel, stream_type)
         return self._request_text(session, "GET", f"/ISAPI/Streaming/channels/{track_stream_id}/capabilities")
 
-    def get_audio_capabilities(self, session: DeviceSession) -> str:
-        return self._request_text(session, "GET", "/ISAPI/System/Audio/capabilities")
-
-    def get_audio_input_capability_status(self, session: DeviceSession) -> AudioInputCapabilityStatus:
-        status = self.get_two_way_audio_channel_status(session)
-        return AudioInputCapabilityStatus(
-            supported=status.supported,
-            request_path=status.capability_path,
-        )
-
-    def get_two_way_audio_channel_status(
-        self,
-        session: DeviceSession,
-        channel: int = 1,
-    ) -> TwoWayAudioChannelStatus:
-        capability_path = "/ISAPI/System/TwoWayAudio/channels/capabilities"
-        config_path = f"/ISAPI/System/TwoWayAudio/channels/{channel}"
-        capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
-        capability_channel = self._first_twoway_channel(capability_root)
-        if capability_channel is None:
-            return TwoWayAudioChannelStatus(False, False, capability_path, config_path, "", False, False, 0, 0)
-
-        output_type_node = _find_first_by_local_name(capability_channel, "audioOutputType")
-        microphone_volume_node = _find_first_by_local_name(capability_channel, "microphoneVolume")
-        speaker_supported = self._node_supports_option(output_type_node, "Speaker")
-        output_type = (output_type_node.text or "").strip() if output_type_node is not None and output_type_node.text else ""
-        microphone_volume = self._safe_int(microphone_volume_node.text if microphone_volume_node is not None else None) or 0
-        microphone_volume_max = self._max_from_node(microphone_volume_node) or 0
-
-        return TwoWayAudioChannelStatus(
-            supported=speaker_supported,
-            changed=False,
-            capability_path=capability_path,
-            config_path=config_path,
-            output_type=output_type,
-            output_type_is_speaker=output_type == "Speaker",
-            speaker_supported=speaker_supported,
-            microphone_volume=microphone_volume,
-            microphone_volume_max=microphone_volume_max,
-        )
-
-    def ensure_two_way_audio_speaker_ready(
-        self,
-        session: DeviceSession,
-        channel: int = 1,
-    ) -> TwoWayAudioChannelStatus:
-        status = self.get_two_way_audio_channel_status(session, channel=channel)
-        if not status.supported:
-            return status
-
-        microphone_at_max = status.microphone_volume_max > 0 and status.microphone_volume >= status.microphone_volume_max
-        if status.output_type_is_speaker and microphone_at_max:
-            return status
-
-        config_path = status.config_path
-        config_root = ET.fromstring(self._request_text(session, "GET", config_path))
-        channel_root = self._first_twoway_channel(config_root) or config_root
-
-        self._set_or_create_text(channel_root, "id", str(channel))
-        self._set_or_create_text(channel_root, "enabled", "true")
-        self._set_or_create_text(channel_root, "audioOutputType", "Speaker")
-        if status.microphone_volume_max > 0:
-            self._set_or_create_text(channel_root, "microphoneVolume", str(status.microphone_volume_max))
-
-        xml_body = ET.tostring(config_root, encoding="utf-8", xml_declaration=True).decode("utf-8")
-        self._request_text(session, "PUT", config_path, body=xml_body)
-
-        refreshed = self.get_two_way_audio_channel_status(session, channel=channel)
-        return TwoWayAudioChannelStatus(
-            supported=refreshed.supported,
-            changed=True,
-            capability_path=refreshed.capability_path,
-            config_path=refreshed.config_path,
-            output_type=refreshed.output_type,
-            output_type_is_speaker=refreshed.output_type_is_speaker,
-            speaker_supported=refreshed.speaker_supported,
-            microphone_volume=refreshed.microphone_volume,
-            microphone_volume_max=refreshed.microphone_volume_max,
-        )
-
     def get_streaming_channel_config(
         self,
         session: DeviceSession,
@@ -204,11 +136,152 @@ class HikvisionIsapiClient:
     ) -> str:
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
-        return self._request_text(
+        return self._request_text(session, "PUT", f"/ISAPI/Streaming/channels/{track_stream_id}", body=xml_body)
+
+    def get_audio_input_capability_status(self, session: DeviceSession) -> AudioInputCapabilityStatus:
+        status = self.get_two_way_audio_channel_status(session)
+        return AudioInputCapabilityStatus(
+            supported=status.micin_supported,
+            request_path=status.capability_path,
+        )
+
+    def get_two_way_audio_channel_status(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> TwoWayAudioChannelStatus:
+        capability_path = "/ISAPI/System/TwoWayAudio/channels/capabilities"
+        config_path = f"/ISAPI/System/TwoWayAudio/channels/{channel}"
+        capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
+        capability_channel = self._first_twoway_channel(capability_root)
+        if capability_channel is None:
+            return TwoWayAudioChannelStatus(False, False, capability_path, config_path, False, "", False, False, "", False, False, 0, 0, 0, 0)
+
+        capability_input_type_node = _find_first_by_local_name(capability_channel, "audioInputType")
+        capability_output_type_node = _find_first_by_local_name(capability_channel, "audioOutputType")
+        capability_speaker_volume_node = _find_first_by_local_name(capability_channel, "speakerVolume")
+        capability_microphone_volume_node = _find_first_by_local_name(capability_channel, "microphoneVolume")
+
+        micin_supported = self._node_supports_option(capability_input_type_node, "MicIn")
+        speaker_supported = self._node_supports_option(capability_output_type_node, "Speaker")
+        speaker_volume_max = self._max_from_node(capability_speaker_volume_node) or 0
+        microphone_volume_max = self._max_from_node(capability_microphone_volume_node) or 0
+        if capability_output_type_node is None and capability_speaker_volume_node is not None:
+            # Some devices expose speaker capability via speakerVolume but do not publish audioOutputType.
+            speaker_supported = True
+
+        config_root = ET.fromstring(self._request_text(session, "GET", config_path))
+        config_channel = self._first_twoway_channel(config_root) or config_root
+        enabled_node = _find_first_by_local_name(config_channel, "enabled")
+        input_type_node = _find_first_by_local_name(config_channel, "audioInputType")
+        output_type_node = _find_first_by_local_name(config_channel, "audioOutputType")
+        speaker_volume_node = _find_first_by_local_name(config_channel, "speakerVolume")
+        microphone_volume_node = _find_first_by_local_name(config_channel, "microphoneVolume")
+
+        enabled = (enabled_node.text or "").strip().lower() in {"true", "1"} if enabled_node is not None else False
+        input_type = (input_type_node.text or "").strip() if input_type_node is not None and input_type_node.text else ""
+        output_type = (output_type_node.text or "").strip() if output_type_node is not None and output_type_node.text else ""
+        speaker_volume = self._safe_int(speaker_volume_node.text if speaker_volume_node is not None else None) or 0
+        microphone_volume = self._safe_int(microphone_volume_node.text if microphone_volume_node is not None else None) or 0
+        if not output_type and speaker_supported:
+            output_type = "Speaker"
+
+        return TwoWayAudioChannelStatus(
+            supported=micin_supported or speaker_supported,
+            changed=False,
+            capability_path=capability_path,
+            config_path=config_path,
+            enabled=enabled,
+            input_type=input_type,
+            input_type_is_micin=input_type == "MicIn",
+            micin_supported=micin_supported,
+            output_type=output_type,
+            output_type_is_speaker=output_type == "Speaker",
+            speaker_supported=speaker_supported,
+            speaker_volume=speaker_volume,
+            speaker_volume_max=speaker_volume_max,
+            microphone_volume=microphone_volume,
+            microphone_volume_max=microphone_volume_max,
+        )
+
+    def ensure_two_way_audio_channel_ready(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+        *,
+        require_input_type: Optional[str] = None,
+        require_output_type: Optional[str] = None,
+        enable: bool = True,
+        maximize_microphone_volume: bool = False,
+        maximize_speaker_volume: bool = False,
+    ) -> TwoWayAudioChannelStatus:
+        status = self.get_two_way_audio_channel_status(session, channel=channel)
+        if require_input_type == "MicIn" and not status.micin_supported:
+            return status
+        if require_output_type == "Speaker" and not status.speaker_supported:
+            return status
+
+        microphone_at_max = status.microphone_volume_max > 0 and status.microphone_volume >= status.microphone_volume_max
+        speaker_at_max = status.speaker_volume_max > 0 and status.speaker_volume >= status.speaker_volume_max
+        input_type_ready = require_input_type is None or status.input_type == require_input_type
+        output_type_ready = require_output_type is None or status.output_type == require_output_type
+        enabled_ready = (not enable) or status.enabled
+        microphone_ready = (not maximize_microphone_volume) or status.microphone_volume_max <= 0 or microphone_at_max
+        speaker_ready = (not maximize_speaker_volume) or status.speaker_volume_max <= 0 or speaker_at_max
+        if input_type_ready and output_type_ready and enabled_ready and microphone_ready and speaker_ready:
+            return status
+
+        config_path = status.config_path
+        config_root = ET.fromstring(self._request_text(session, "GET", config_path))
+        channel_root = self._first_twoway_channel(config_root) or config_root
+
+        self._set_existing_text(channel_root, "id", str(channel))
+        if enable:
+            self._set_existing_text(channel_root, "enabled", "true")
+        if require_input_type is not None:
+            self._set_existing_text(channel_root, "audioInputType", require_input_type)
+        if require_output_type is not None:
+            self._set_existing_text(channel_root, "audioOutputType", require_output_type)
+        if maximize_microphone_volume and status.microphone_volume_max > 0:
+            self._set_existing_text(channel_root, "microphoneVolume", str(status.microphone_volume_max))
+        if maximize_speaker_volume and status.speaker_volume_max > 0:
+            self._set_existing_text(channel_root, "speakerVolume", str(status.speaker_volume_max))
+
+        xml_body = self._serialize_xml(config_root)
+        self._request_text(session, "PUT", config_path, body=xml_body)
+
+        refreshed = self.get_two_way_audio_channel_status(session, channel=channel)
+        return TwoWayAudioChannelStatus(
+            supported=refreshed.supported,
+            changed=True,
+            capability_path=refreshed.capability_path,
+            config_path=refreshed.config_path,
+            enabled=refreshed.enabled,
+            input_type=refreshed.input_type,
+            input_type_is_micin=refreshed.input_type_is_micin,
+            micin_supported=refreshed.micin_supported,
+            output_type=refreshed.output_type,
+            output_type_is_speaker=refreshed.output_type_is_speaker,
+            speaker_supported=refreshed.speaker_supported,
+            speaker_volume=refreshed.speaker_volume,
+            speaker_volume_max=refreshed.speaker_volume_max,
+            microphone_volume=refreshed.microphone_volume,
+            microphone_volume_max=refreshed.microphone_volume_max,
+        )
+
+    def ensure_two_way_audio_speaker_ready(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> TwoWayAudioChannelStatus:
+        return self.ensure_two_way_audio_channel_ready(
             session,
-            "PUT",
-            f"/ISAPI/Streaming/channels/{track_stream_id}",
-            body=xml_body,
+            channel=channel,
+            require_input_type="MicIn",
+            require_output_type="Speaker",
+            enable=True,
+            maximize_microphone_volume=True,
+            maximize_speaker_volume=True,
         )
 
     def ensure_composite_stream_recording_enabled(
@@ -307,6 +380,12 @@ class HikvisionIsapiClient:
             return AudioVolumeStatus(True, False, current_value, max_value, config_path)
 
         volume_node.text = str(max_value)
+        enabled_node = _find_first_by_local_name(config_root, "enabled")
+        if enabled_node is not None:
+            enabled_node.text = "true"
+        enable_node = _find_first_by_local_name(config_root, "enable")
+        if enable_node is not None:
+            enable_node.text = "true"
         xml_body = ET.tostring(config_root, encoding="utf-8", xml_declaration=True).decode("utf-8")
         self._request_text(session, "PUT", config_path, body=xml_body)
         return AudioVolumeStatus(True, True, max_value, max_value, config_path)
@@ -365,7 +444,20 @@ class HikvisionIsapiClient:
         node.text = value
         return node
 
-    def _max_from_node(self, node: ET.Element) -> Optional[int]:
+    def _set_existing_text(self, root: ET.Element, local_name: str, value: str) -> Optional[ET.Element]:
+        node = _find_first_by_local_name(root, local_name)
+        if node is None:
+            return None
+        node.text = value
+        return node
+
+    def _serialize_xml(self, root: ET.Element) -> str:
+        namespace = _namespace_of(root)
+        if namespace:
+            ET.register_namespace("", namespace)
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+    def _max_from_node(self, node: Optional[ET.Element]) -> Optional[int]:
         if node is None:
             return None
         return self._safe_int(node.attrib.get("max"))
@@ -397,9 +489,7 @@ class HikvisionIsapiClient:
     ) -> tuple[bytes, dict[str, str]]:
         url = self._build_url(session, path)
         payload = body.encode("utf-8") if body is not None else None
-        headers = {
-            "Accept": "application/xml,text/xml,*/*",
-        }
+        headers = {"Accept": "application/xml,text/xml,*/*"}
         if body is not None:
             headers["Content-Type"] = "application/xml; charset=utf-8"
         try:
@@ -423,8 +513,7 @@ class HikvisionIsapiClient:
 
     def _build_url(self, session: DeviceSession, path: str) -> str:
         normalized_path = path if path.startswith("/") else f"/{path}"
-        host = session.host
-        return urllib.parse.urlunsplit((self.scheme, host, normalized_path, "", ""))
+        return urllib.parse.urlunsplit((self.scheme, session.host, normalized_path, "", ""))
 
     def _request_error_message(self, error: requests.RequestException) -> str:
         response = getattr(error, "response", None)

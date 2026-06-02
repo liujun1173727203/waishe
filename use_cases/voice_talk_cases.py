@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+import hashlib
 import time
 import wave
 from dataclasses import dataclass
@@ -67,13 +68,16 @@ class VoiceTalkUseCases:
     def prepare_random_audio_file(
         self,
         session: DeviceSession,
-        duration_seconds: int = 3,
+        duration_seconds: int = 4,
         voice_channel: Optional[int] = None,
         output_dir: str | Path | None = None,
+        file_prefix: str = "random_audio",
         seed: Optional[int] = None,
         amplitude_ratio: float = 0.35,
         per_frame_delay: float = FRAME_MS / 1000.0,
         encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
+        digit_sequence: Optional[str] = None,
+        fingerprint_source: Optional[str] = None,
     ) -> RandomAudioTalkResult:
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
@@ -88,12 +92,14 @@ class VoiceTalkUseCases:
             )
 
         target_channel = voice_channel or session.default_voice_channel
-        wav_path = self._build_output_path(session.host, output_dir)
+        wav_path = self._build_output_path(session.host, output_dir, prefix=file_prefix)
         pcm_bytes, digit_sequence = self._generate_digit_pcm_wav(
             file_path=wav_path,
             duration_seconds=duration_seconds,
             amplitude_ratio=amplitude_ratio,
             seed=seed,
+            digit_sequence=digit_sequence,
+            fingerprint_source=fingerprint_source or session.host,
         )
         encoded_bytes = self._encode_pcm_for_device(pcm_bytes, compress.encode_type)
 
@@ -145,21 +151,27 @@ class VoiceTalkUseCases:
     def play_random_audio_file(
         self,
         session: DeviceSession,
-        duration_seconds: int = 3,
+        duration_seconds: int = 4,
         voice_channel: Optional[int] = None,
         output_dir: str | Path | None = None,
+        file_prefix: str = "random_audio",
         seed: Optional[int] = None,
         amplitude_ratio: float = 0.35,
         per_frame_delay: float = FRAME_MS / 1000.0,
         encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
+        digit_sequence: Optional[str] = None,
+        fingerprint_source: Optional[str] = None,
     ) -> RandomAudioTalkResult:
         prepared_audio = self.prepare_random_audio_file(
             session=session,
             duration_seconds=duration_seconds,
             voice_channel=voice_channel,
             output_dir=output_dir,
+            file_prefix=file_prefix,
             seed=seed,
             amplitude_ratio=amplitude_ratio,
+            digit_sequence=digit_sequence,
+            fingerprint_source=fingerprint_source,
         )
         return self.send_prepared_audio(
             session=session,
@@ -180,19 +192,31 @@ class VoiceTalkUseCases:
         duration_seconds: int,
         amplitude_ratio: float,
         seed: Optional[int],
+        digit_sequence: Optional[str],
+        fingerprint_source: Optional[str],
     ) -> tuple[bytes, str]:
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        generator = random.Random(seed)
-        digit_sequence = "".join(generator.choice("0123456789") for _ in range(3))
+        if digit_sequence is None:
+            digit_sequence = self._build_device_fingerprint_digits(fingerprint_source, seed)
+        if not digit_sequence or any(digit not in DIGIT_TONE_MAP for digit in digit_sequence):
+            raise ValueError("digit_sequence must contain only digits 0-9")
+
+        fingerprint = self._fingerprint_bytes(fingerprint_source or digit_sequence, seed)
+        pitch_scale = 0.94 + (fingerprint[6] / 255.0) * 0.14
+        gap_ratio = 0.025 + (fingerprint[7] / 255.0) * 0.035
+        active_ratio = 0.70 + (fingerprint[8] / 255.0) * 0.18
+        digit_count = len(digit_sequence)
         amplitude = int(32767 * amplitude_ratio)
         sample_count = SAMPLE_RATE_8K * duration_seconds
         pcm_samples = [0] * sample_count
-        digit_sample_count = max(1, int(sample_count * 0.22))
-        gap_sample_count = max(1, int(sample_count * 0.06))
-        cursor = max(0, (sample_count - (digit_sample_count * len(digit_sequence) + gap_sample_count * (len(digit_sequence) - 1))) // 2)
+        gap_sample_count = max(1, int(sample_count * gap_ratio))
+        available_digit_samples = max(1, sample_count - gap_sample_count * (digit_count - 1))
+        digit_sample_count = max(1, int(available_digit_samples * active_ratio / digit_count))
+        total_digit_samples = digit_sample_count * digit_count + gap_sample_count * (digit_count - 1)
+        cursor = max(0, (sample_count - total_digit_samples) // 2)
 
         for digit in digit_sequence:
-            tone = self._build_digit_tone_samples(digit, digit_sample_count, amplitude)
+            tone = self._build_digit_tone_samples(digit, digit_sample_count, amplitude, pitch_scale=pitch_scale)
             end = min(sample_count, cursor + len(tone))
             for index in range(cursor, end):
                 pcm_samples[index] = tone[index - cursor]
@@ -208,8 +232,32 @@ class VoiceTalkUseCases:
 
         return pcm_bytes, digit_sequence
 
-    def _build_digit_tone_samples(self, digit: str, sample_count: int, amplitude: int) -> list[int]:
+    def _build_device_fingerprint_digits(self, fingerprint_source: Optional[str], seed: Optional[int]) -> str:
+        if seed is not None:
+            generator = random.Random(seed)
+            return "".join(generator.choice("0123456789") for _ in range(6))
+
+        digest = self._fingerprint_bytes(fingerprint_source or "default", seed)
+        digits = [str(byte % 10) for byte in digest[:6]]
+        for index in range(1, len(digits)):
+            if digits[index] == digits[index - 1]:
+                digits[index] = str((int(digits[index]) + index + 3) % 10)
+        return "".join(digits)
+
+    def _fingerprint_bytes(self, fingerprint_source: str, seed: Optional[int]) -> bytes:
+        source = f"{fingerprint_source}|{'' if seed is None else seed}"
+        return hashlib.sha256(source.encode("utf-8")).digest()
+
+    def _build_digit_tone_samples(
+        self,
+        digit: str,
+        sample_count: int,
+        amplitude: int,
+        pitch_scale: float = 1.0,
+    ) -> list[int]:
         low_freq, high_freq = DIGIT_TONE_MAP[digit]
+        low_freq *= pitch_scale
+        high_freq *= pitch_scale
         samples: list[int] = []
         fade_samples = max(1, min(sample_count // 8, SAMPLE_RATE_8K // 100))
         for index in range(sample_count):

@@ -9,6 +9,9 @@ from hikvision_isapi import HikvisionIsapiClient
 from hikvision_voice import HikvisionSDKError, HikvisionVoiceSDK
 
 
+POST_STOP_SETTLE_SECONDS = 3.0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Hikvision composite stream record demo")
     parser.add_argument("--host", required=True, help="device ip or hostname")
@@ -63,7 +66,22 @@ def main() -> int:
         return 1
     finally:
         if recorder is not None:
-            recorder.stop()
+            print(
+                "stopping recorder:",
+                f"handle={recorder.handle}",
+                f"received_bytes={recorder.received_bytes}",
+                f"file_size_bytes={recorder.file_size_bytes}",
+            )
+            recorder.stop_save_real_data()
+            print("NET_DVR_StopSaveRealData done")
+            recorder.stop_real_play()
+            print("NET_DVR_StopRealPlay done")
+            time.sleep(POST_STOP_SETTLE_SECONDS)
+            print(
+                "recorder stopped:",
+                f"waited={POST_STOP_SETTLE_SECONDS:.2f}s",
+                f"file_size_bytes={recorder.file_size_bytes}",
+            )
         if session is not None:
             sdk.logout(session)
         sdk.cleanup()

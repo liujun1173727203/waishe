@@ -459,7 +459,7 @@ class HikvisionVoiceSDK:
         self._sdk.NET_DVR_StartVoiceCom_MR_V30.restype = c_long
         self._sdk.NET_DVR_StopVoiceCom.argtypes = [c_long]
         self._sdk.NET_DVR_StopVoiceCom.restype = c_bool
-        self._sdk.NET_DVR_VoiceComSendData.argtypes = [c_long, c_char_p, c_uint32]
+        self._sdk.NET_DVR_VoiceComSendData.argtypes = [c_long, c_void_p, c_uint32]
         self._sdk.NET_DVR_VoiceComSendData.restype = c_bool
         self._sdk.NET_DVR_RealPlay_V40.argtypes = [c_long, POINTER(NET_DVR_PREVIEWINFO), REAL_DATA_CALLBACK, c_void_p]
         self._sdk.NET_DVR_RealPlay_V40.restype = c_long
@@ -601,9 +601,9 @@ class VoiceCall:
             return
         handle = self.handle
         self.handle = None
-        self.sdk._forget_callback(handle)
         if not self.sdk._sdk.NET_DVR_StopVoiceCom(handle):
             raise self.sdk._last_error("NET_DVR_StopVoiceCom failed", "NET_DVR_StopVoiceCom")
+        self.sdk._forget_callback(handle)
 
     def __enter__(self) -> "VoiceCall":
         self.start()
@@ -652,7 +652,12 @@ class VoiceForwardSession:
             raise HikvisionSDKError("Voice forwarding session not started")
         if not data:
             return
-        if not self.sdk._sdk.NET_DVR_VoiceComSendData(self.handle, data, len(data)):
+        buffer = ctypes.create_string_buffer(data, len(data))
+        if not self.sdk._sdk.NET_DVR_VoiceComSendData(
+            self.handle,
+            ctypes.cast(buffer, c_void_p),
+            len(data),
+        ):
             raise self.sdk._last_error("NET_DVR_VoiceComSendData failed", "NET_DVR_VoiceComSendData")
 
     def stop(self) -> None:
@@ -660,9 +665,9 @@ class VoiceForwardSession:
             return
         handle = self.handle
         self.handle = None
-        self.sdk._forget_callback(handle)
         if not self.sdk._sdk.NET_DVR_StopVoiceCom(handle):
             raise self.sdk._last_error("NET_DVR_StopVoiceCom failed", "NET_DVR_StopVoiceCom")
+        self.sdk._forget_callback(handle)
 
     def __enter__(self) -> "VoiceForwardSession":
         self.start()
@@ -738,25 +743,70 @@ class StreamRecorder:
         self._saving = True
         self.sdk._remember_callback(handle, callback)
 
-    def stop(self) -> None:
+    def stop(self, log_callback: Optional[Callable[[str], None]] = None) -> None:
         if self.handle is None:
             return
 
+        def _log(message: str) -> None:
+            if log_callback is not None:
+                log_callback(message)
+
         handle = self.handle
         self.handle = None
-        self.sdk._forget_callback(handle)
         errors: list[HikvisionSDKError] = []
+        stop_started_at = time.monotonic()
+
+        _log(
+            f"stream recorder stop begin handle={handle} "
+            f"saving={self._saving} received_bytes={self._received_bytes} "
+            f"received_packets={self._received_packets}"
+        )
 
         if self._saving:
-            self._saving = False
-            if not self.sdk._sdk.NET_DVR_StopSaveRealData(handle):
-                errors.append(self.sdk._last_error("NET_DVR_StopSaveRealData failed", "NET_DVR_StopSaveRealData"))
+            save_stop_started_at = time.monotonic()
+            _log("call NET_DVR_StopSaveRealData")
+            try:
+                self.stop_save_real_data()
+            except HikvisionSDKError as exc:
+                errors.append(exc)
+            else:
+                _log(
+                    "NET_DVR_StopSaveRealData done "
+                    f"elapsed={time.monotonic() - save_stop_started_at:.3f}s"
+                )
 
-        if not self.sdk._sdk.NET_DVR_StopRealPlay(handle):
-            errors.append(self.sdk._last_error("NET_DVR_StopRealPlay failed", "NET_DVR_StopRealPlay"))
+        realplay_stop_started_at = time.monotonic()
+        _log("call NET_DVR_StopRealPlay")
+        try:
+            self.stop_real_play()
+        except HikvisionSDKError as exc:
+            errors.append(exc)
+        else:
+            _log(
+                "NET_DVR_StopRealPlay done "
+                f"elapsed={time.monotonic() - realplay_stop_started_at:.3f}s"
+            )
+
+        _log(f"stream recorder stop end elapsed={time.monotonic() - stop_started_at:.3f}s")
 
         if errors:
             raise errors[0]
+
+    def stop_save_real_data(self) -> None:
+        if self.handle is None or not self._saving:
+            return
+        self._saving = False
+        if not self.sdk._sdk.NET_DVR_StopSaveRealData(self.handle):
+            raise self.sdk._last_error("NET_DVR_StopSaveRealData failed", "NET_DVR_StopSaveRealData")
+
+    def stop_real_play(self) -> None:
+        if self.handle is None:
+            return
+        handle = self.handle
+        self.handle = None
+        if not self.sdk._sdk.NET_DVR_StopRealPlay(handle):
+            raise self.sdk._last_error("NET_DVR_StopRealPlay failed", "NET_DVR_StopRealPlay")
+        self.sdk._forget_callback(handle)
 
     @property
     def received_bytes(self) -> int:

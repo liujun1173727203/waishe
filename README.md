@@ -1,66 +1,101 @@
-# Hikvision Voice Talk Wrapper
+# Hikvision Speaker Validation Toolkit
 
-基于 `libs/win64` 下的 `HCNetSDK` 做了一个纯 Python `ctypes` 封装，用来完成电脑与设备之间的语音输入输出通信。
+本项目基于海康 `HCNetSDK` Windows 64 位动态库，使用 Python `ctypes` 封装设备登录、语音转发、实时取流录像、ISAPI 配置和录像音频分析能力。
 
-## 文件
+核心目标是验证“被测设备的扬声器是否有效”：向被测设备发送一段专属扬声器测试音，由另一台录音设备录制复合流，再分析录像音频中是否包含这段测试音。
 
-- `hikvision_voice.py`: SDK 初始化、登录、语音对讲、语音转发接口封装。
-- `demo_voice_call.py`: 直接发起电脑和设备双向语音通话的命令行示例。
+## 主要能力
 
-## 已封装能力
+- SDK 初始化、登录、登出、清理。
+- 双向语音转发，支持向设备发送编码音频帧。
+- 实时预览取流并保存录像。
+- ISAPI 查询和配置双向音频、音量、复合流音频。
+- 生成设备专属扬声器测试音。
+- 从录像中提取音频并判断是否有声音。
+- 判断录像音频中是否包含当前被测设备的扬声器测试音。
+- 按设备 IP 目录保存录像、参考音频、提取音频和执行日志。
 
-- `HikvisionVoiceSDK.initialize()`: 初始化 SDK，并自动配置 `HCNetSDKCom`、OpenSSL 依赖路径。
-- `login()` / `logout()`: 登录和登出设备。
-- `set_talk_mode()`: 设置对讲模式。
-  - `False`: 使用 SDK 默认的对讲库模式。
-  - `True`: 使用旧版 Windows API 模式。
-- `start_call()`: 启动电脑麦克风和电脑扬声器参与的双向语音通话。
-- `start_voice_forward()`: 启动语音转发，接收设备编码后的音频，并支持 `send_encoded_audio()` 主动向设备发送编码音频数据。
-- `get_current_audio_compress()`: 获取设备当前生效的语音编码参数。
-- `set_audio_compress()`: 设置设备语音编码参数。
+## 关键文件
 
-## 直接通话示例
+- `hikvision_voice.py`：HCNetSDK 封装，包含登录、语音转发、取流录像、录像关闭。
+- `hikvision_isapi.py`：ISAPI 封装，包含音频能力、音量、复合流音频配置。
+- `video_analysis.py`：录像音频提取、声音检测、参考测试音匹配。
+- `use_cases/voice_talk_cases.py`：扬声器测试音生成和发送。
+- `use_cases/speaker_test_cases.py`：完整扬声器测试流程。
+- `demo_speaker_test.py`：扬声器测试命令行入口。
+- `demo_video_analysis.py`：单独分析录像音频的命令行入口。
+- `demo_stream_record.py`：普通实时流录像示例。
+- `demo_composite_stream_record.py`：复合流录像示例。
 
-```powershell
-python .\demo_voice_call.py `
-  --host 192.168.1.64 `
-  --port 8000 `
-  --username admin `
-  --password 12345
-```
-
-如果你要切到旧版 Windows 采集模式：
+## 快速运行
 
 ```powershell
-python .\demo_voice_call.py `
-  --host 192.168.1.64 `
+python .\demo_speaker_test.py `
+  --host 10.18.117.22 `
   --username admin `
-  --password 12345 `
-  --windows-api
+  --password asdf!234 `
+  --recorder-host 10.40.230.23 `
+  --recorder-username admin `
+  --recorder-password asdf!234
 ```
 
-## 代码里调用
+默认时间线：
 
-```python
-from hikvision_voice import HikvisionVoiceSDK
+- 录音设备先录制 `2s` 环境音。
+- 被测设备播放 `4s` 扬声器测试音。
+- 播放结束后继续录制 `3s`。
+- 停止录像后等待 `3s` 再检查文件并分析。
 
-sdk = HikvisionVoiceSDK()
-sdk.initialize()
-sdk.set_talk_mode(use_windows_api=False)
+## 扬声器测试音
 
-session = sdk.login("192.168.1.64", 8000, "admin", "12345")
-call = sdk.start_call(session)
+默认会使用被测设备 IP 作为 `test-tone-id`，生成稳定的设备专属测试音。测试音不仅数字序列不同，还会在音调比例、数字间隔和有效发声占比上做差异化，降低实验室多台设备同时播放时的误判概率。
 
-input("语音通话中，回车结束...")
+可显式指定测试音 ID：
 
-call.stop()
-sdk.logout(session)
-sdk.cleanup()
+```powershell
+python .\demo_speaker_test.py --host 10.18.117.22 --test-tone-id device-B-001
 ```
 
-## 说明
+也可指定固定数字序列：
 
-- `start_call()` 复用 SDK 自带的本地采集和本地播放能力，不依赖 `pyaudio` 一类第三方库。
-- `start_voice_forward()` 面向更底层的“设备音频收发接口”场景，适合你后续接入自定义编码器、文件流或你自己的音频处理链路。
-- 设备侧如果修改了语音编码参数，通常需要重启设备后生效。
-- 如果设备是通过 NVR 挂接的 IPC，对讲通道号通常不是 `1`，默认应优先使用登录信息里的 `byStartDTalkChan`。
+```powershell
+python .\demo_speaker_test.py --host 10.18.117.22 --digit-sequence 1234
+```
+
+## 判定逻辑
+
+扬声器有效的核心判断是：
+
+- `has_sound=True`：录音设备录像中存在有效声音。
+- `match=True`：录像音频中匹配到当前被测设备的扬声器测试音。
+- `score>=threshold`：匹配分数达到阈值，默认阈值 `0.8`。
+
+分析逻辑同时使用 RMS 能量曲线、DTMF 频率特征、频偏容忍模板搜索和期望数字序列匹配。该设计适用于设备 B 扬声器播放、设备 A 麦克风录音、现场存在噪声且音调可能偏移的实验室环境。
+
+## 输出目录
+
+默认输出到：
+
+```text
+recordings/speaker_tests/<device-ip>/
+```
+
+包含：
+
+- `speaker_test_log_<ip>_<timestamp>.log`：带时间戳的完整控制台日志。
+- `speaker_test_reference_<ip>_<timestamp>_*.wav`：本次测试参考音频。
+- `speaker_test_record_<ip>_<timestamp>.mp4`：录音设备录制的录像。
+- `speaker_test_record_audio_<ip>_<timestamp>.wav`：从录像提取出的音频。
+
+## 依赖
+
+- Windows 64 位。
+- Python 3。
+- 项目内置 `libs/win64` 海康 SDK 依赖。
+- 本机安装 `ffmpeg`，或通过 `--ffmpeg-path` 指定可执行文件路径。
+
+默认示例路径：
+
+```text
+D:\ffmpeg\ffmpeg-2026-05-28-git-7b46c6a2a3-essentials_build\bin\ffmpeg.exe
+```
