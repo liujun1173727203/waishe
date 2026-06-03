@@ -4,6 +4,7 @@ import atexit
 import ctypes
 import os
 import threading
+import time
 from datetime import datetime
 from ctypes import POINTER, Structure, byref, c_bool, c_byte, c_char, c_char_p, c_int, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
 from dataclasses import dataclass
@@ -79,6 +80,13 @@ class NET_DVR_COMPRESSION_AUDIO(Structure):
         ("byAudioBitRate", c_ubyte),
         ("byRes", c_ubyte * 4),
         ("bySupport", c_ubyte),
+    ]
+
+
+class NET_DVR_JPEGPARA(Structure):
+    _fields_ = [
+        ("wPicSize", c_uint16),
+        ("wPicQuality", c_uint16),
     ]
 
 
@@ -220,6 +228,14 @@ class AudioCompressInfo:
     sampling_rate: int
     bit_rate: int
     support_flag: int
+
+
+@dataclass(frozen=True)
+class CapturePictureResult:
+    file_path: Path
+    method: str
+    fallback_used: bool
+    jpeg_error: Optional[HikvisionSDKError] = None
 
 
 @dataclass(frozen=True)
@@ -412,6 +428,123 @@ class HikvisionVoiceSDK:
         recorder.start()
         return recorder
 
+    def capture_picture(
+        self,
+        session: DeviceSession,
+        file_path: str | os.PathLike[str] | None = None,
+        channel: Optional[int] = None,
+        stream_type: int = STREAM_TYPE_MAIN,
+        link_mode: int = LINK_MODE_TCP,
+        jpeg_picture_size: int = 0xFF,
+        jpeg_quality: int = 0,
+        fallback_to_stream: bool = True,
+    ) -> CapturePictureResult:
+        """Capture a picture, preferring device-side JPEG and falling back to stream capture."""
+        self._require_initialized()
+        target_channel = channel or session.default_preview_channel
+        target_path = Path(file_path) if file_path is not None else self._default_capture_picture_path(session.host, target_channel)
+        try:
+            jpeg_path = self.capture_jpeg_picture(
+                session=session,
+                file_path=target_path,
+                channel=target_channel,
+                picture_size=jpeg_picture_size,
+                quality=jpeg_quality,
+            )
+            return CapturePictureResult(file_path=jpeg_path, method="jpeg", fallback_used=False)
+        except HikvisionSDKError as exc:
+            if not fallback_to_stream:
+                raise
+            stream_path = self.capture_stream_picture(
+                session=session,
+                file_path=target_path,
+                channel=target_channel,
+                stream_type=stream_type,
+                link_mode=link_mode,
+            )
+            return CapturePictureResult(file_path=stream_path, method="stream", fallback_used=True, jpeg_error=exc)
+
+    def capture_jpeg_picture(
+        self,
+        session: DeviceSession,
+        file_path: str | os.PathLike[str],
+        channel: Optional[int] = None,
+        picture_size: int = 0xFF,
+        quality: int = 0,
+    ) -> Path:
+        self._require_initialized()
+        target_channel = channel or session.default_preview_channel
+        target_path = Path(file_path)
+        if target_path.suffix.lower() not in {".jpg", ".jpeg"}:
+            target_path = target_path.with_suffix(".jpg")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        jpeg_para = NET_DVR_JPEGPARA()
+        jpeg_para.wPicSize = picture_size
+        jpeg_para.wPicQuality = quality
+        encoded_path = str(target_path.resolve()).encode("gbk", errors="ignore")
+        if not self._sdk.NET_DVR_CaptureJPEGPicture(session.user_id, target_channel, byref(jpeg_para), encoded_path):
+            raise self._last_error("NET_DVR_CaptureJPEGPicture failed", "NET_DVR_CaptureJPEGPicture")
+        self._ensure_non_empty_file(target_path, "NET_DVR_CaptureJPEGPicture")
+        return target_path
+
+    def capture_stream_picture(
+        self,
+        session: DeviceSession,
+        file_path: str | os.PathLike[str],
+        channel: Optional[int] = None,
+        stream_type: int = STREAM_TYPE_MAIN,
+        link_mode: int = LINK_MODE_TCP,
+        wait_first_data_seconds: float = 5.0,
+    ) -> Path:
+        self._require_initialized()
+        target_channel = channel or session.default_preview_channel
+        target_path = self._stream_capture_path(Path(file_path))
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        first_data_event = threading.Event()
+        received_bytes = 0
+
+        def _handle_real_data(_real_handle: int, _data_type: int, data: bytes) -> None:
+            nonlocal received_bytes
+            if data:
+                received_bytes += len(data)
+                first_data_event.set()
+
+        preview_info = NET_DVR_PREVIEWINFO()
+        preview_info.lChannel = target_channel
+        preview_info.dwStreamType = stream_type
+        preview_info.dwLinkMode = link_mode
+        preview_info.hPlayWnd = None
+        preview_info.bBlocked = True
+        preview_info.bPassbackRecord = False
+
+        callback = self._build_real_data_callback(_handle_real_data)
+        handle = self._sdk.NET_DVR_RealPlay_V40(session.user_id, byref(preview_info), callback, None)
+        if handle < 0:
+            raise self._last_error("NET_DVR_RealPlay_V40 failed", "NET_DVR_RealPlay_V40")
+
+        self._remember_callback(handle, callback)
+        pending_error: Optional[BaseException] = None
+        try:
+            first_data_event.wait(wait_first_data_seconds)
+            encoded_path = str(target_path.resolve()).encode("gbk", errors="ignore")
+            if not self._sdk.NET_DVR_CapturePicture(handle, encoded_path):
+                raise self._last_error("NET_DVR_CapturePicture failed", "NET_DVR_CapturePicture")
+            self._ensure_non_empty_file(target_path, "NET_DVR_CapturePicture")
+            return target_path
+        except BaseException as exc:
+            pending_error = exc
+            raise
+        finally:
+            try:
+                if not self._sdk.NET_DVR_StopRealPlay(handle):
+                    stop_error = self._last_error("NET_DVR_StopRealPlay failed", "NET_DVR_StopRealPlay")
+                    if pending_error is None:
+                        raise stop_error
+            finally:
+                self._forget_callback(handle)
+
     def _load_sdk(self) -> None:
         if not self.sdk_root.exists():
             raise FileNotFoundError(f"SDK path not found: {self.sdk_root}")
@@ -469,6 +602,10 @@ class HikvisionVoiceSDK:
         self._sdk.NET_DVR_SaveRealData.restype = c_bool
         self._sdk.NET_DVR_StopSaveRealData.argtypes = [c_long]
         self._sdk.NET_DVR_StopSaveRealData.restype = c_bool
+        self._sdk.NET_DVR_CaptureJPEGPicture.argtypes = [c_long, c_long, POINTER(NET_DVR_JPEGPARA), c_char_p]
+        self._sdk.NET_DVR_CaptureJPEGPicture.restype = c_bool
+        self._sdk.NET_DVR_CapturePicture.argtypes = [c_long, c_char_p]
+        self._sdk.NET_DVR_CapturePicture.restype = c_bool
         self._sdk.NET_DVR_STDXMLConfig.argtypes = [c_long, POINTER(NET_DVR_XML_CONFIG_INPUT), POINTER(NET_DVR_XML_CONFIG_OUTPUT)]
         self._sdk.NET_DVR_STDXMLConfig.restype = c_bool
 
@@ -500,6 +637,25 @@ class HikvisionVoiceSDK:
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return Path.cwd() / "recordings" / "streams" / host_dir / f"stream_ch{channel}_{timestamp}.mp4"
+
+    def _default_capture_picture_path(self, host: str, channel: int) -> Path:
+        host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return Path.cwd() / "recordings" / "captures" / host_dir / f"capture_ch{channel}_{timestamp}.jpg"
+
+    def _stream_capture_path(self, file_path: Path) -> Path:
+        if file_path.suffix.lower() == ".bmp":
+            return file_path
+        suffix = file_path.suffix or ".jpg"
+        return file_path.with_name(f"{file_path.stem}_stream").with_suffix(".bmp" if suffix.lower() != ".bmp" else suffix)
+
+    def _ensure_non_empty_file(self, file_path: Path, api_name: str) -> None:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if file_path.exists() and file_path.stat().st_size > 0:
+                return
+            time.sleep(0.05)
+        raise HikvisionSDKError(f"capture file is empty: {file_path}", api_name=api_name)
 
     def stdxml_config(
         self,

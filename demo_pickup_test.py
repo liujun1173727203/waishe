@@ -7,7 +7,7 @@ from pathlib import Path
 
 from hikvision_isapi import HikvisionIsapiClient
 from hikvision_voice import HikvisionSDKError, HikvisionVoiceSDK
-from use_cases import RecorderDeviceConfig, SpeakerTestUseCases
+from use_cases import PickupTestUseCases, PlaybackDeviceConfig
 from video_analysis import RecordedVideoAnalyzer, VideoAnalysisError
 
 
@@ -33,9 +33,6 @@ class TimestampTee:
         self._stream.flush()
         self._log_file.flush()
 
-    def isatty(self) -> bool:
-        return bool(getattr(self._stream, "isatty", lambda: False)())
-
     @property
     def encoding(self):
         return getattr(self._stream, "encoding", None)
@@ -49,43 +46,42 @@ class TimestampTee:
 
 def _default_output_dir(host: str) -> Path:
     host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
-    return Path.cwd() / "recordings" / "speaker_tests" / host_dir
+    return Path.cwd() / "recordings" / "pickup_tests" / host_dir
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Speaker test use case with composite stream recording and audio matching")
-    parser.add_argument("--host", default="10.18.117.22", help="device ip or hostname")
-    parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
-    parser.add_argument("--username", default="admin", help="device username")
-    parser.add_argument("--password", default="asdf!234", help="device password")
-    parser.add_argument("--voice-channel", type=int, default=2, help="voice talk channel, 0 means auto")
-    parser.add_argument("--record-channel", type=int, default=0, help="recorder device A preview channel, 0 means auto")
+    parser = argparse.ArgumentParser(description="Pickup test: record test device MicIn while playback device A plays audio")
+    parser.add_argument("--host", default="10.18.117.22", help="test device ip or hostname")
+    parser.add_argument("--port", type=int, default=8000, help="test device sdk port")
+    parser.add_argument("--username", default="admin", help="test device username")
+    parser.add_argument("--password", default="asdf!234", help="test device password")
+    parser.add_argument("--record-channel", type=int, default=1, help="test device preview channel, 0 means auto")
     parser.add_argument("--record-duration", type=int, default=10, help="record duration in seconds")
     parser.add_argument("--send-duration", type=int, default=4, help="generated audio duration in seconds")
-    parser.add_argument("--similarity-threshold", type=float, default=0.8, help="match threshold, default 0.8")
+    parser.add_argument("--similarity-threshold", type=float, default=0.8, help="match threshold")
     parser.add_argument("--seed", type=int, default=None, help="optional random seed")
-    parser.add_argument("--digit-sequence", default="", help="optional fixed speaker validation digit sequence")
-    parser.add_argument("--test-tone-id", default="", help="optional id for this device's speaker validation tone")
-    parser.add_argument("--test-device-output-type", default="Speaker", help="test device audioOutputType, e.g. Speaker or LineOut")
+    parser.add_argument("--digit-sequence", default="", help="optional fixed pickup validation digit sequence")
+    parser.add_argument("--test-tone-id", default="", help="optional id for playback device A validation tone")
+    parser.add_argument("--test-device-input-type", default="MicIn", help="test device audioInputType, e.g. MicIn or LineIn")
+    parser.add_argument("--test-device-output-type", default="Speaker", help="test device audioOutputType, default Speaker")
     parser.add_argument(
         "--audio-compression-types",
         default="auto",
-        help="comma separated audioCompressionType list, default auto means iterate supported options",
+        help="comma separated playback device A audioCompressionType list, default auto means iterate supported options",
     )
     parser.add_argument("--ffmpeg-path", default=r"D:\ffmpeg\ffmpeg-2026-05-28-git-7b46c6a2a3-essentials_build\bin\ffmpeg.exe", help="ffmpeg executable path")
-    parser.add_argument("--recorder-host", default="10.40.230.23", help="recorder device A ip or hostname")
-    parser.add_argument("--recorder-port", type=int, default=8000, help="recorder device A sdk port, default 8000")
-    parser.add_argument("--recorder-username", default="admin", help="recorder device A username")
-    parser.add_argument("--recorder-password", default="asdf!234", help="recorder device A password")
-    parser.add_argument("--recorder-channel", type=int, default=0, help="recorder device A preview channel, 0 means auto")
-    parser.add_argument("--recorder-voice-channel", type=int, default=1, help="recorder device A two-way audio channel")
+    parser.add_argument("--playback-host", default="10.40.230.23", help="playback device A ip or hostname")
+    parser.add_argument("--playback-port", type=int, default=8000, help="playback device A sdk port")
+    parser.add_argument("--playback-username", default="admin", help="playback device A username")
+    parser.add_argument("--playback-password", default="asdf!234", help="playback device A password")
+    parser.add_argument("--playback-voice-channel", type=int, default=1, help="playback device A voice talk channel")
     parser.add_argument("--enable-log", action="store_true", help="enable sdk log output")
     args = parser.parse_args()
 
     base_dir = _default_output_dir(args.host)
     base_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file_path = base_dir / f"speaker_test_log_{args.host.replace('.', '_')}_{timestamp}.log"
+    log_file_path = base_dir / f"pickup_test_log_{args.host.replace('.', '_')}_{timestamp}.log"
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
@@ -94,62 +90,62 @@ def main() -> int:
     sys.stderr = TimestampTee(original_stderr, log_file)
 
     sdk = HikvisionVoiceSDK()
-    recorder_sdk = HikvisionVoiceSDK()
+    playback_sdk = HikvisionVoiceSDK()
     isapi = HikvisionIsapiClient(sdk)
-    use_cases = SpeakerTestUseCases(
+    use_cases = PickupTestUseCases(
         sdk=sdk,
         isapi=isapi,
-        recorder_sdk=recorder_sdk,
+        playback_sdk=playback_sdk,
         analyzer=RecordedVideoAnalyzer(ffmpeg_path=args.ffmpeg_path),
-        recorder_device=RecorderDeviceConfig(
-            host=args.recorder_host,
-            port=args.recorder_port,
-            username=args.recorder_username,
-            password=args.recorder_password,
-            channel=args.recorder_channel,
-            voice_channel=args.recorder_voice_channel,
+        playback_device=PlaybackDeviceConfig(
+            host=args.playback_host,
+            port=args.playback_port,
+            username=args.playback_username,
+            password=args.playback_password,
+            voice_channel=args.playback_voice_channel,
         ),
     )
 
     session = None
     try:
-        print(f"speaker test log file: {log_file_path}")
+        print(f"pickup test log file: {log_file_path}")
         sdk.initialize(enable_log=args.enable_log)
-        recorder_sdk.initialize(enable_log=args.enable_log)
+        playback_sdk.initialize(enable_log=args.enable_log)
         session = sdk.login(args.host, args.port, args.username, args.password)
 
-        audio_compression_types = _resolve_audio_compression_types(
+        audio_compression_types = _resolve_playback_audio_compression_types(
             isapi=isapi,
-            session=session,
+            playback_sdk=playback_sdk,
+            host=args.playback_host,
+            port=args.playback_port,
+            username=args.playback_username,
+            password=args.playback_password,
             requested=args.audio_compression_types,
         )
-        print(f"speaker test audioCompressionType list: {','.join(audio_compression_types)}")
+        print(f"pickup test playback audioCompressionType list: {','.join(audio_compression_types)}")
         failed = False
         for audio_compression_type in audio_compression_types:
-            print(f"speaker test start audioCompressionType={audio_compression_type}")
+            print(f"pickup test start playback audioCompressionType={audio_compression_type}")
             try:
-                result = use_cases.run_speaker_test(
+                result = use_cases.run_pickup_test(
                     session=session,
-                    record_channel=args.record_channel or args.recorder_channel,
-                    voice_channel=args.voice_channel or session.default_voice_channel,
+                    record_channel=args.record_channel,
                     record_duration_seconds=args.record_duration,
                     send_duration_seconds=args.send_duration,
                     similarity_threshold=args.similarity_threshold,
                     seed=args.seed,
                     digit_sequence=args.digit_sequence or None,
-                    fingerprint_source=args.test_tone_id or args.host,
+                    fingerprint_source=args.test_tone_id or args.playback_host,
+                    test_device_input_type=args.test_device_input_type,
                     test_device_output_type=args.test_device_output_type,
                     audio_compression_type=audio_compression_type,
                 )
 
                 print(
-                    "speaker test done:",
-                    f"audio_compression_type={result.two_way_audio_status.audio_compression_type or audio_compression_type}",
+                    "pickup test done:",
+                    f"audio_compression_type={result.playback_device_audio_status.audio_compression_type or audio_compression_type}",
                     f"record={result.record_file_path}",
                     f"reference={result.reference_audio_path}",
-                    f"audio_input_supported={result.audio_input_status.supported}",
-                    f"audio_output_type={result.two_way_audio_status.output_type}",
-                    f"microphone_volume={result.two_way_audio_status.microphone_volume}/{result.two_way_audio_status.microphone_volume_max}",
                     f"digit_sequence={result.talk_result.digit_sequence}",
                     f"has_sound={result.sound_result.has_sound}",
                     f"match={result.match_result.matched}",
@@ -158,7 +154,7 @@ def main() -> int:
                 )
             except (HikvisionSDKError, VideoAnalysisError, FileNotFoundError, ValueError) as exc:
                 failed = True
-                print(f"speaker test failed audioCompressionType={audio_compression_type}: {exc}", file=sys.stderr)
+                print(f"pickup test failed audioCompressionType={audio_compression_type}: {exc}", file=sys.stderr)
         if failed:
             return 1
     except (HikvisionSDKError, VideoAnalysisError, FileNotFoundError, ValueError) as exc:
@@ -168,7 +164,7 @@ def main() -> int:
         if session is not None:
             sdk.logout(session)
         sdk.cleanup()
-        recorder_sdk.cleanup()
+        playback_sdk.cleanup()
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout = original_stdout
@@ -177,9 +173,13 @@ def main() -> int:
     return 0
 
 
-def _resolve_audio_compression_types(
+def _resolve_playback_audio_compression_types(
     isapi: HikvisionIsapiClient,
-    session,
+    playback_sdk: HikvisionVoiceSDK,
+    host: str,
+    port: int,
+    username: str,
+    password: str,
     requested: str,
 ) -> list[str]:
     if requested.strip().lower() != "auto":
@@ -188,12 +188,16 @@ def _resolve_audio_compression_types(
             raise ValueError("audio-compression-types cannot be empty")
         return values
 
-    status = isapi.get_two_way_audio_channel_status(session)
+    playback_session = playback_sdk.login(host, port, username, password)
+    try:
+        status = isapi.get_two_way_audio_channel_status(playback_session)
+    finally:
+        playback_sdk.logout(playback_session)
     if status.audio_compression_type_options:
         return list(status.audio_compression_type_options)
     if status.audio_compression_type:
         return [status.audio_compression_type]
-    raise ValueError("device audioCompressionType options/current value not found")
+    raise ValueError("playback device A audioCompressionType options/current value not found")
 
 
 if __name__ == "__main__":

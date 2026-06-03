@@ -79,10 +79,14 @@ class TwoWayAudioChannelStatus:
     output_type: str
     output_type_is_speaker: bool
     speaker_supported: bool
+    audio_compression_type: str
     speaker_volume: int
     speaker_volume_max: int
     microphone_volume: int
     microphone_volume_max: int
+    input_type_options: tuple[str, ...] = ()
+    output_type_options: tuple[str, ...] = ()
+    audio_compression_type_options: tuple[str, ...] = ()
 
 
 class HikvisionIsapiClient:
@@ -155,32 +159,60 @@ class HikvisionIsapiClient:
         capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
         capability_channel = self._first_twoway_channel(capability_root)
         if capability_channel is None:
-            return TwoWayAudioChannelStatus(False, False, capability_path, config_path, False, "", False, False, "", False, False, 0, 0, 0, 0)
+            return TwoWayAudioChannelStatus(
+                supported=False,
+                changed=False,
+                capability_path=capability_path,
+                config_path=config_path,
+                enabled=False,
+                input_type="",
+                input_type_is_micin=False,
+                micin_supported=False,
+                output_type="",
+                output_type_is_speaker=False,
+                speaker_supported=False,
+                audio_compression_type="",
+                speaker_volume=0,
+                speaker_volume_max=0,
+                microphone_volume=0,
+                microphone_volume_max=0,
+            )
 
         capability_input_type_node = _find_first_by_local_name(capability_channel, "audioInputType")
         capability_output_type_node = _find_first_by_local_name(capability_channel, "audioOutputType")
+        capability_audio_compression_type_node = _find_first_by_local_name(capability_channel, "audioCompressionType")
         capability_speaker_volume_node = _find_first_by_local_name(capability_channel, "speakerVolume")
         capability_microphone_volume_node = _find_first_by_local_name(capability_channel, "microphoneVolume")
 
-        micin_supported = self._node_supports_option(capability_input_type_node, "MicIn")
-        speaker_supported = self._node_supports_option(capability_output_type_node, "Speaker")
+        input_type_options = self._node_options(capability_input_type_node)
+        output_type_options = self._node_options(capability_output_type_node)
+        audio_compression_type_options = self._node_options(capability_audio_compression_type_node)
+        micin_supported = "MicIn" in input_type_options
+        speaker_supported = "Speaker" in output_type_options
         speaker_volume_max = self._max_from_node(capability_speaker_volume_node) or 0
         microphone_volume_max = self._max_from_node(capability_microphone_volume_node) or 0
         if capability_output_type_node is None and capability_speaker_volume_node is not None:
             # Some devices expose speaker capability via speakerVolume but do not publish audioOutputType.
             speaker_supported = True
+            output_type_options = ("Speaker",)
 
         config_root = ET.fromstring(self._request_text(session, "GET", config_path))
         config_channel = self._first_twoway_channel(config_root) or config_root
         enabled_node = _find_first_by_local_name(config_channel, "enabled")
         input_type_node = _find_first_by_local_name(config_channel, "audioInputType")
         output_type_node = _find_first_by_local_name(config_channel, "audioOutputType")
+        audio_compression_type_node = _find_first_by_local_name(config_channel, "audioCompressionType")
         speaker_volume_node = _find_first_by_local_name(config_channel, "speakerVolume")
         microphone_volume_node = _find_first_by_local_name(config_channel, "microphoneVolume")
 
         enabled = (enabled_node.text or "").strip().lower() in {"true", "1"} if enabled_node is not None else False
         input_type = (input_type_node.text or "").strip() if input_type_node is not None and input_type_node.text else ""
         output_type = (output_type_node.text or "").strip() if output_type_node is not None and output_type_node.text else ""
+        audio_compression_type = (
+            (audio_compression_type_node.text or "").strip()
+            if audio_compression_type_node is not None and audio_compression_type_node.text
+            else ""
+        )
         speaker_volume = self._safe_int(speaker_volume_node.text if speaker_volume_node is not None else None) or 0
         microphone_volume = self._safe_int(microphone_volume_node.text if microphone_volume_node is not None else None) or 0
         if not output_type and speaker_supported:
@@ -198,10 +230,14 @@ class HikvisionIsapiClient:
             output_type=output_type,
             output_type_is_speaker=output_type == "Speaker",
             speaker_supported=speaker_supported,
+            audio_compression_type=audio_compression_type,
             speaker_volume=speaker_volume,
             speaker_volume_max=speaker_volume_max,
             microphone_volume=microphone_volume,
             microphone_volume_max=microphone_volume_max,
+            input_type_options=input_type_options,
+            output_type_options=output_type_options,
+            audio_compression_type_options=audio_compression_type_options,
         )
 
     def ensure_two_way_audio_channel_ready(
@@ -211,6 +247,7 @@ class HikvisionIsapiClient:
         *,
         require_input_type: Optional[str] = None,
         require_output_type: Optional[str] = None,
+        require_audio_compression_type: Optional[str] = None,
         enable: bool = True,
         maximize_microphone_volume: bool = False,
         maximize_speaker_volume: bool = False,
@@ -220,15 +257,36 @@ class HikvisionIsapiClient:
             return status
         if require_output_type == "Speaker" and not status.speaker_supported:
             return status
+        if require_input_type and status.input_type_options and require_input_type not in status.input_type_options:
+            return status
+        if require_output_type and status.output_type_options and require_output_type not in status.output_type_options:
+            return status
+        if (
+            require_audio_compression_type
+            and status.audio_compression_type_options
+            and require_audio_compression_type not in status.audio_compression_type_options
+        ):
+            return status
 
         microphone_at_max = status.microphone_volume_max > 0 and status.microphone_volume >= status.microphone_volume_max
         speaker_at_max = status.speaker_volume_max > 0 and status.speaker_volume >= status.speaker_volume_max
         input_type_ready = require_input_type is None or status.input_type == require_input_type
         output_type_ready = require_output_type is None or status.output_type == require_output_type
+        audio_compression_type_ready = (
+            require_audio_compression_type is None
+            or status.audio_compression_type == require_audio_compression_type
+        )
         enabled_ready = (not enable) or status.enabled
         microphone_ready = (not maximize_microphone_volume) or status.microphone_volume_max <= 0 or microphone_at_max
         speaker_ready = (not maximize_speaker_volume) or status.speaker_volume_max <= 0 or speaker_at_max
-        if input_type_ready and output_type_ready and enabled_ready and microphone_ready and speaker_ready:
+        if (
+            input_type_ready
+            and output_type_ready
+            and audio_compression_type_ready
+            and enabled_ready
+            and microphone_ready
+            and speaker_ready
+        ):
             return status
 
         config_path = status.config_path
@@ -242,6 +300,8 @@ class HikvisionIsapiClient:
             self._set_existing_text(channel_root, "audioInputType", require_input_type)
         if require_output_type is not None:
             self._set_existing_text(channel_root, "audioOutputType", require_output_type)
+        if require_audio_compression_type is not None:
+            self._set_existing_text(channel_root, "audioCompressionType", require_audio_compression_type)
         if maximize_microphone_volume and status.microphone_volume_max > 0:
             self._set_existing_text(channel_root, "microphoneVolume", str(status.microphone_volume_max))
         if maximize_speaker_volume and status.speaker_volume_max > 0:
@@ -263,10 +323,14 @@ class HikvisionIsapiClient:
             output_type=refreshed.output_type,
             output_type_is_speaker=refreshed.output_type_is_speaker,
             speaker_supported=refreshed.speaker_supported,
+            audio_compression_type=refreshed.audio_compression_type,
             speaker_volume=refreshed.speaker_volume,
             speaker_volume_max=refreshed.speaker_volume_max,
             microphone_volume=refreshed.microphone_volume,
             microphone_volume_max=refreshed.microphone_volume_max,
+            input_type_options=refreshed.input_type_options,
+            output_type_options=refreshed.output_type_options,
+            audio_compression_type_options=refreshed.audio_compression_type_options,
         )
 
     def ensure_two_way_audio_speaker_ready(
@@ -434,8 +498,13 @@ class HikvisionIsapiClient:
     def _node_supports_option(self, node: Optional[ET.Element], expected_option: str) -> bool:
         if node is None:
             return False
+        return expected_option in self._node_options(node)
+
+    def _node_options(self, node: Optional[ET.Element]) -> tuple[str, ...]:
+        if node is None:
+            return ()
         options = node.attrib.get("opt", "")
-        return expected_option in {item.strip() for item in options.split(",") if item.strip()}
+        return tuple(item.strip() for item in options.split(",") if item.strip())
 
     def _set_or_create_text(self, root: ET.Element, local_name: str, value: str) -> ET.Element:
         node = _find_first_by_local_name(root, local_name)
