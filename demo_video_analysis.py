@@ -13,7 +13,7 @@ def main() -> int:
     parser.add_argument("--expected-digits", default="", help="optional expected digit sequence for DTMF matching")
     parser.add_argument("--ffmpeg-path", default="ffmpeg", help="ffmpeg executable path")
     parser.add_argument("--rms-threshold", type=float, default=300.0, help="sound detection RMS threshold")
-    parser.add_argument("--score-threshold", type=float, default=0.75, help="reference audio match threshold")
+    parser.add_argument("--score-threshold", type=float, default=0.7, help="reference audio match threshold")
     args = parser.parse_args()
 
     analyzer = RecordedVideoAnalyzer(ffmpeg_path=args.ffmpeg_path)

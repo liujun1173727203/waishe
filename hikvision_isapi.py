@@ -67,6 +67,19 @@ class AudioInputCapabilityStatus:
 
 
 @dataclass(frozen=True)
+class SupplementLightStatus:
+    supported: bool
+    changed: bool
+    capability_path: str
+    config_path: str
+    enabled: Optional[bool]
+    brightness: Optional[int]
+    brightness_min: int
+    brightness_max: int
+    mode: str
+
+
+@dataclass(frozen=True)
 class TwoWayAudioChannelStatus:
     supported: bool
     changed: bool
@@ -422,6 +435,94 @@ class HikvisionIsapiClient:
             output_status=self.set_audio_output_volume_to_max(session, output_channel),
         )
 
+    def get_supplement_light_status(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> SupplementLightStatus:
+        capability_path = f"/ISAPI/Image/channels/{channel}/SupplementLight/capabilities"
+        config_paths = [
+            f"/ISAPI/Image/channels/{channel}/SupplementLight",
+            f"/ISAPI/System/channel/{channel}/externalDevice/supplementLight",
+        ]
+        capability_root: Optional[ET.Element] = None
+        try:
+            capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
+        except HikvisionSDKError:
+            capability_root = None
+
+        config_path, config_root = self._get_first_xml(session, config_paths)
+        if config_path is None or config_root is None:
+            raise HikvisionSDKError(
+                "supplement light config not found",
+                api_name="GET /ISAPI/Image/channels/<channel>/SupplementLight",
+            )
+        status = self._supplement_light_status_from_xml(
+            capability_root=capability_root,
+            config_root=config_root,
+            capability_path=capability_path,
+            config_path=config_path,
+            changed=False,
+        )
+        return status
+
+    def ensure_supplement_light_ready(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+        *,
+        enabled: Optional[bool] = None,
+        brightness: Optional[int] = None,
+        mode: Optional[str] = "manual",
+    ) -> SupplementLightStatus:
+        status = self.get_supplement_light_status(session, channel=channel)
+        if not status.supported:
+            return status
+
+        brightness_ready = brightness is None or status.brightness == brightness
+        enabled_ready = enabled is None or status.enabled == enabled
+        mode_ready = mode is None or not status.mode or status.mode.lower() == mode.lower()
+        if brightness_ready and enabled_ready and mode_ready:
+            return status
+
+        config_root = ET.fromstring(self._request_text(session, "GET", status.config_path))
+        if enabled is not None:
+            self._set_first_existing_text(config_root, ("enabled", "enable"), "true" if enabled else "false")
+        if mode is not None:
+            self._set_first_existing_text(
+                config_root,
+                ("mode", "supplementLightMode", "lightMode"),
+                mode,
+            )
+        if brightness is not None:
+            clipped = max(status.brightness_min, min(status.brightness_max, int(brightness)))
+            self._set_first_existing_text(
+                config_root,
+                (
+                    "brightness",
+                    "supplementLightIntensity",
+                    "supplementLightBrightness",
+                    "intensity",
+                    "lightBrightness",
+                    "whiteLightBrightness",
+                ),
+                str(clipped),
+            )
+
+        self._request_text(session, "PUT", status.config_path, body=self._serialize_xml(config_root))
+        refreshed = self.get_supplement_light_status(session, channel=channel)
+        return SupplementLightStatus(
+            supported=refreshed.supported,
+            changed=True,
+            capability_path=refreshed.capability_path,
+            config_path=refreshed.config_path,
+            enabled=refreshed.enabled,
+            brightness=refreshed.brightness,
+            brightness_min=refreshed.brightness_min,
+            brightness_max=refreshed.brightness_max,
+            mode=refreshed.mode,
+        )
+
     def _set_audio_volume_to_max(
         self,
         session: DeviceSession,
@@ -489,6 +590,74 @@ class HikvisionIsapiClient:
                 return node
         return None
 
+    def _supplement_light_status_from_xml(
+        self,
+        capability_root: Optional[ET.Element],
+        config_root: ET.Element,
+        capability_path: str,
+        config_path: str,
+        changed: bool,
+    ) -> SupplementLightStatus:
+        enabled_node = self._find_first_by_local_names(config_root, ("enabled", "enable"))
+        brightness_node = self._find_first_by_local_names(
+            config_root,
+            (
+                "brightness",
+                "supplementLightIntensity",
+                "supplementLightBrightness",
+                "intensity",
+                "lightBrightness",
+                "whiteLightBrightness",
+            ),
+        )
+        mode_node = self._find_first_by_local_names(config_root, ("mode", "supplementLightMode", "lightMode"))
+        brightness_capability_node = None
+        if capability_root is not None:
+            brightness_capability_node = self._find_first_by_local_names(
+                capability_root,
+                (
+                    "brightness",
+                    "supplementLightIntensity",
+                    "supplementLightBrightness",
+                    "intensity",
+                    "lightBrightness",
+                    "whiteLightBrightness",
+                ),
+            )
+        brightness_min = self._min_from_node(brightness_capability_node) or self._min_from_node(brightness_node) or 0
+        brightness_max = self._max_from_node(brightness_capability_node) or self._max_from_node(brightness_node) or 100
+        enabled: Optional[bool] = None
+        if enabled_node is not None and enabled_node.text is not None:
+            enabled = enabled_node.text.strip().lower() in {"true", "1", "yes", "on"}
+        brightness = self._safe_int(brightness_node.text if brightness_node is not None else None)
+        mode = (mode_node.text or "").strip() if mode_node is not None and mode_node.text else ""
+        return SupplementLightStatus(
+            supported=brightness_node is not None or enabled_node is not None,
+            changed=changed,
+            capability_path=capability_path,
+            config_path=config_path,
+            enabled=enabled,
+            brightness=brightness,
+            brightness_min=brightness_min,
+            brightness_max=brightness_max,
+            mode=mode,
+        )
+
+    def _find_first_by_local_names(self, root: ET.Element, local_names: tuple[str, ...]) -> Optional[ET.Element]:
+        for local_name in local_names:
+            node = _find_first_by_local_name(root, local_name)
+            if node is not None:
+                return node
+        return None
+
+    def _set_first_existing_text(self, root: ET.Element, local_names: tuple[str, ...], value: str) -> ET.Element:
+        for local_name in local_names:
+            node = _find_first_by_local_name(root, local_name)
+            if node is not None:
+                node.text = value
+                return node
+        return self._set_or_create_text(root, local_names[0], value)
+
     def _first_twoway_channel(self, root: ET.Element) -> Optional[ET.Element]:
         for node in root.iter():
             if _local_name(node.tag) == "TwoWayAudioChannel":
@@ -530,6 +699,11 @@ class HikvisionIsapiClient:
         if node is None:
             return None
         return self._safe_int(node.attrib.get("max"))
+
+    def _min_from_node(self, node: Optional[ET.Element]) -> Optional[int]:
+        if node is None:
+            return None
+        return self._safe_int(node.attrib.get("min"))
 
     def _safe_int(self, value: Optional[str]) -> Optional[int]:
         if value is None:

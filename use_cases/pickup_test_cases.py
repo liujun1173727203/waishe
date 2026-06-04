@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import wave
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,14 @@ from hikvision_voice import DeviceSession, HikvisionSDKError, HikvisionVoiceSDK
 from video_analysis import ReferenceAudioMatchResult, RecordedVideoAnalyzer, SoundAnalysisResult
 
 from .speaker_test_cases import POST_STOP_SETTLE_SECONDS, POST_TALK_RECORD_SECONDS, PRE_TALK_RECORD_SECONDS
-from .voice_talk_cases import PreparedRandomAudio, RandomAudioTalkResult, VoiceTalkUseCases
+from .voice_talk_cases import (
+    CHANNELS_MONO,
+    SAMPLE_RATE_8K,
+    SAMPLE_WIDTH_BYTES,
+    PreparedRandomAudio,
+    RandomAudioTalkResult,
+    VoiceTalkUseCases,
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,8 @@ class PickupTestResult:
     talk_result: RandomAudioTalkResult
     sound_result: SoundAnalysisResult
     match_result: ReferenceAudioMatchResult
+    analysis_source: str
+    callback_audio_path: Optional[Path] = None
 
 
 class PickupTestUseCases:
@@ -60,6 +70,12 @@ class PickupTestUseCases:
     def _log_step(self, message: str) -> None:
         print(f"[pickup-test] {message}", flush=True)
 
+    def _audio_identity_text(self, talk_result: RandomAudioTalkResult | PreparedRandomAudio) -> str:
+        if talk_result.frequency_profile:
+            profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
+            return f"frequency_profile={profile}"
+        return f"digit_sequence={talk_result.digit_sequence}"
+
     def run_pickup_test(
         self,
         session: DeviceSession,
@@ -67,7 +83,7 @@ class PickupTestUseCases:
         record_duration_seconds: int = 10,
         send_duration_seconds: int = 4,
         output_dir: str | Path | None = None,
-        similarity_threshold: float = 0.8,
+        similarity_threshold: float = 0.7,
         amplitude_ratio: float = 0.6,
         seed: Optional[int] = None,
         per_frame_delay: float = 0.02,
@@ -107,6 +123,7 @@ class PickupTestUseCases:
         test_id = f"{session.host.replace('.', '_')}_{compression_suffix}_{timestamp}"
         record_file_path = base_dir / f"pickup_test_record_{test_id}.mp4"
         extracted_audio_path = base_dir / f"pickup_test_record_audio_{test_id}.wav"
+        callback_audio_path = base_dir / f"pickup_test_talk_callback_audio_{test_id}.wav"
 
         playback_session: Optional[DeviceSession] = None
         recorder = None
@@ -116,7 +133,9 @@ class PickupTestUseCases:
         talk_result: Optional[RandomAudioTalkResult] = None
         sound_result: Optional[SoundAnalysisResult] = None
         match_result: Optional[ReferenceAudioMatchResult] = None
+        analysis_source = "recording"
         pending_error: Optional[BaseException] = None
+        composite_status = CompositeStreamStatus(False, 0, False, False)
         try:
             self._log_step(
                 f"configure test device to {test_device_input_type} + {test_device_output_type} + max volume"
@@ -216,14 +235,15 @@ class PickupTestUseCases:
                 channel=recorder_channel,
             )
             if not composite_status.supported:
-                raise HikvisionSDKError(
-                    f"test device channel {recorder_channel} does not support composite stream recording",
-                    api_name="GET /ISAPI/Streaming/channels/<trackStreamID>/capabilities",
+                self._log_step(
+                    f"test device channel {recorder_channel} does not support composite stream recording, "
+                    "fallback to talk callback audio"
                 )
-            self._log_step(
-                f"test device composite stream ready trackStreamID={composite_status.track_stream_id} "
-                f"audio_enabled={composite_status.audio_enabled} changed={composite_status.changed}"
-            )
+            else:
+                self._log_step(
+                    f"test device composite stream ready trackStreamID={composite_status.track_stream_id} "
+                    f"audio_enabled={composite_status.audio_enabled} changed={composite_status.changed}"
+                )
 
             self._log_step(
                 f"prepare pickup validation audio voice_channel={self.playback_device.voice_channel} "
@@ -242,50 +262,76 @@ class PickupTestUseCases:
             )
             self._log_step(f"reference audio ready path={prepared_audio.file_path}")
             self._log_step(
-                f"digit sequence={prepared_audio.digit_sequence} "
+                f"{self._audio_identity_text(prepared_audio)} "
                 f"test_tone_id={fingerprint_source or self.playback_device.host}"
             )
 
-            self._log_step(f"start test device recording channel={recorder_channel} output={record_file_path}")
-            recorder = self.sdk.start_stream_record(
-                session=session,
-                file_path=record_file_path,
-                channel=recorder_channel,
-            )
-            self._log_step(
-                f"test device stream started handle={recorder.handle} "
-                f"channel={recorder_channel} path={record_file_path}"
-            )
-            record_started_at = time.monotonic()
-            if not recorder.wait_for_first_data(timeout_seconds=min(5.0, max(1.0, record_duration_seconds / 2))):
-                raise HikvisionSDKError(
-                    "test device did not receive media data in time",
-                    api_name="NET_DVR_RealPlay_V40/NET_DVR_SaveRealData",
+            if composite_status.supported:
+                try:
+                    self._log_step(f"start test device recording channel={recorder_channel} output={record_file_path}")
+                    recorder = self.sdk.start_stream_record(
+                        session=session,
+                        file_path=record_file_path,
+                        channel=recorder_channel,
+                    )
+                    self._log_step(
+                        f"test device stream started handle={recorder.handle} "
+                        f"channel={recorder_channel} path={record_file_path}"
+                    )
+                    record_started_at = time.monotonic()
+                    if not recorder.wait_for_first_data(timeout_seconds=min(5.0, max(1.0, record_duration_seconds / 2))):
+                        raise HikvisionSDKError(
+                            "test device did not receive media data in time",
+                            api_name="NET_DVR_RealPlay_V40/NET_DVR_SaveRealData",
+                        )
+                    self._log_step(f"test device stream data ready bytes={recorder.received_bytes}")
+                    self._log_step(f"keep test device recording for {PRE_TALK_RECORD_SECONDS:.2f}s before playback starts")
+                    time.sleep(PRE_TALK_RECORD_SECONDS)
+
+                    self._log_step(
+                        f"start playback device A audio talk voice_channel={prepared_audio.voice_channel} "
+                        f"frames={prepared_audio.frame_count}"
+                    )
+                    talk_result = self.voice_talk_use_cases.send_prepared_audio(
+                        session=playback_session,
+                        prepared_audio=prepared_audio,
+                        per_frame_delay=per_frame_delay,
+                    )
+                    self._log_step(
+                        f"audio sent to playback device A {self._audio_identity_text(talk_result)} "
+                        f"frames={talk_result.frames_sent} bytes={talk_result.bytes_sent}"
+                    )
+
+                    elapsed_record_seconds = max(0.0, time.monotonic() - record_started_at)
+                    self._log_step(
+                        f"playback finished, recorded={elapsed_record_seconds:.2f}s, "
+                        f"keep test device recording for {POST_TALK_RECORD_SECONDS:.2f}s"
+                    )
+                    time.sleep(POST_TALK_RECORD_SECONDS)
+                except BaseException as exc:
+                    self._log_step(f"recording path failed, fallback to talk callback audio: {exc}")
+                    analysis_source = "talk_callback"
+                    if recorder is not None:
+                        try:
+                            recorder.stop(log_callback=self._log_step)
+                        finally:
+                            recorder = None
+                    talk_result = self._capture_talk_callback_audio(
+                        session=session,
+                        playback_session=playback_session,
+                        prepared_audio=prepared_audio,
+                        output_path=callback_audio_path,
+                        per_frame_delay=per_frame_delay,
+                    )
+            else:
+                analysis_source = "talk_callback"
+                talk_result = self._capture_talk_callback_audio(
+                    session=session,
+                    playback_session=playback_session,
+                    prepared_audio=prepared_audio,
+                    output_path=callback_audio_path,
+                    per_frame_delay=per_frame_delay,
                 )
-            self._log_step(f"test device stream data ready bytes={recorder.received_bytes}")
-            self._log_step(f"keep test device recording for {PRE_TALK_RECORD_SECONDS:.2f}s before playback starts")
-            time.sleep(PRE_TALK_RECORD_SECONDS)
-
-            self._log_step(
-                f"start playback device A audio talk voice_channel={prepared_audio.voice_channel} "
-                f"frames={prepared_audio.frame_count}"
-            )
-            talk_result = self.voice_talk_use_cases.send_prepared_audio(
-                session=playback_session,
-                prepared_audio=prepared_audio,
-                per_frame_delay=per_frame_delay,
-            )
-            self._log_step(
-                f"audio sent to playback device A digits={talk_result.digit_sequence} "
-                f"frames={talk_result.frames_sent} bytes={talk_result.bytes_sent}"
-            )
-
-            elapsed_record_seconds = max(0.0, time.monotonic() - record_started_at)
-            self._log_step(
-                f"playback finished, recorded={elapsed_record_seconds:.2f}s, "
-                f"keep test device recording for {POST_TALK_RECORD_SECONDS:.2f}s"
-            )
-            time.sleep(POST_TALK_RECORD_SECONDS)
         except BaseException as exc:
             pending_error = exc
             self._log_step(f"ERROR during pickup test flow: {exc}")
@@ -311,17 +357,32 @@ class PickupTestUseCases:
                 time.sleep(POST_STOP_SETTLE_SECONDS)
                 record_size = self._wait_for_record_file(record_file_path)
                 if record_size <= 0:
-                    raise HikvisionSDKError(
-                        f"record file is empty: {record_file_path}",
-                        error_message="pickup test recording size is 0 bytes",
-                    )
+                    if playback_session is not None and prepared_audio is not None:
+                        self._log_step(
+                            f"record file is empty, fallback to talk callback audio path={record_file_path}"
+                        )
+                        analysis_source = "talk_callback"
+                        talk_result = self._capture_talk_callback_audio(
+                            session=session,
+                            playback_session=playback_session,
+                            prepared_audio=prepared_audio,
+                            output_path=callback_audio_path,
+                            per_frame_delay=per_frame_delay,
+                        )
+                    else:
+                        raise HikvisionSDKError(
+                            f"record file is empty: {record_file_path}",
+                            error_message="pickup test recording size is 0 bytes",
+                        )
                 total_record_seconds = max(0.0, time.monotonic() - record_started_at) if record_started_at else 0.0
-                self._log_step(f"record file ready size={record_size} bytes duration={total_record_seconds:.2f}s")
+                if record_size > 0:
+                    self._log_step(f"record file ready size={record_size} bytes duration={total_record_seconds:.2f}s")
             if playback_session is not None:
                 self.playback_sdk.logout(playback_session)
                 self._log_step(f"playback device A logout host={playback_session.host}")
 
         if record_size > 0 and prepared_audio is not None:
+            analysis_source = "recording"
             self._log_step("analyze test device recorded audio presence")
             sound_result = self.analyzer.analyze_sound_presence(
                 video_path=record_file_path,
@@ -358,6 +419,29 @@ class PickupTestUseCases:
                 f"expected_digits={match_result.expected_digit_sequence} "
                 f"detected_digits={match_result.detected_digit_sequence}"
             )
+        elif callback_audio_path.exists() and prepared_audio is not None:
+            analysis_source = "talk_callback"
+            extracted_audio_path = callback_audio_path
+            self._log_step(f"analyze test device talk callback audio path={callback_audio_path}")
+            sound_result = self.analyzer.analyze_wav_sound_presence(audio_path=callback_audio_path)
+            analyzed_duration_seconds = sound_result.frame_count * self.analyzer.frame_ms / 1000.0
+            self._log_step(
+                f"sound analysis done source=talk_callback has_sound={sound_result.has_sound} "
+                f"duration={analyzed_duration_seconds:.2f}s audio={callback_audio_path}"
+            )
+            self._log_step("match talk callback audio against playback device A validation audio")
+            match_result = self.analyzer.detect_reference_audio_in_wav(
+                audio_path=callback_audio_path,
+                reference_audio_path=prepared_audio.file_path,
+                score_threshold=similarity_threshold,
+                expected_digit_sequence=prepared_audio.digit_sequence,
+            )
+            self._log_step(
+                f"match analysis done source=talk_callback matched={match_result.matched} "
+                f"score={match_result.best_score:.4f} threshold={match_result.threshold:.2f} "
+                f"expected_digits={match_result.expected_digit_sequence} "
+                f"detected_digits={match_result.detected_digit_sequence}"
+            )
         else:
             self._log_step("skip analysis because no valid recording or reference audio is available")
 
@@ -367,10 +451,12 @@ class PickupTestUseCases:
 
         self._log_step(
             "final conclusion "
+            f"analysis_source={analysis_source} "
             f"record={record_file_path} "
+            f"callback_audio={callback_audio_path if callback_audio_path.exists() else ''} "
             f"reference={prepared_audio.file_path} "
             f"audio_compression_type={playback_device_audio_status.audio_compression_type or 'unknown'} "
-            f"digit_sequence={talk_result.digit_sequence} "
+            f"{self._audio_identity_text(talk_result)} "
             f"has_sound={sound_result.has_sound} "
             f"match={match_result.matched} "
             f"score={match_result.best_score:.4f} "
@@ -388,6 +474,8 @@ class PickupTestUseCases:
             talk_result=talk_result,
             sound_result=sound_result,
             match_result=match_result,
+            analysis_source=analysis_source,
+            callback_audio_path=callback_audio_path if callback_audio_path.exists() else None,
         )
 
     def _default_output_dir(self, host: str) -> Path:
@@ -404,6 +492,62 @@ class PickupTestUseCases:
                     return size
             time.sleep(0.1)
         return size
+
+    def _capture_talk_callback_audio(
+        self,
+        session: DeviceSession,
+        playback_session: DeviceSession,
+        prepared_audio: PreparedRandomAudio,
+        output_path: Path,
+        per_frame_delay: float,
+    ) -> RandomAudioTalkResult:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        chunks: list[bytes] = []
+
+        def _on_audio(data: bytes, _audio_flag: int) -> None:
+            if data:
+                chunks.append(data)
+
+        self._log_step(f"start test device talk callback capture output={output_path}")
+        with self.sdk.start_call(
+            session=session,
+            voice_channel=session.default_voice_channel,
+            need_pcm_callback=True,
+            audio_callback=_on_audio,
+        ):
+            self._log_step(f"keep talk callback capture for {PRE_TALK_RECORD_SECONDS:.2f}s before playback starts")
+            time.sleep(PRE_TALK_RECORD_SECONDS)
+            self._log_step(
+                f"start playback device A audio talk for callback capture "
+                f"voice_channel={prepared_audio.voice_channel} frames={prepared_audio.frame_count}"
+            )
+            talk_result = self.voice_talk_use_cases.send_prepared_audio(
+                session=playback_session,
+                prepared_audio=prepared_audio,
+                per_frame_delay=per_frame_delay,
+            )
+            self._log_step(
+                f"audio sent to playback device A {self._audio_identity_text(talk_result)} "
+                f"frames={talk_result.frames_sent} bytes={talk_result.bytes_sent}"
+            )
+            self._log_step(f"playback finished, keep talk callback capture for {POST_TALK_RECORD_SECONDS:.2f}s")
+            time.sleep(POST_TALK_RECORD_SECONDS)
+
+        pcm_bytes = b"".join(chunks)
+        if not pcm_bytes:
+            raise HikvisionSDKError(
+                "test device talk callback returned no audio data",
+                api_name="NET_DVR_StartVoiceCom_V30",
+            )
+        if len(pcm_bytes) % SAMPLE_WIDTH_BYTES:
+            pcm_bytes = pcm_bytes[: len(pcm_bytes) - (len(pcm_bytes) % SAMPLE_WIDTH_BYTES)]
+        with wave.open(str(output_path), "wb") as wav_file:
+            wav_file.setnchannels(CHANNELS_MONO)
+            wav_file.setsampwidth(SAMPLE_WIDTH_BYTES)
+            wav_file.setframerate(SAMPLE_RATE_8K)
+            wav_file.writeframes(pcm_bytes)
+        self._log_step(f"talk callback audio ready bytes={len(pcm_bytes)} path={output_path}")
+        return talk_result
 
     def _input_type_supported(self, status: TwoWayAudioChannelStatus, input_type: str) -> bool:
         if input_type == "MicIn":

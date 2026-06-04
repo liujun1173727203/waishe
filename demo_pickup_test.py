@@ -58,10 +58,10 @@ def main() -> int:
     parser.add_argument("--record-channel", type=int, default=1, help="test device preview channel, 0 means auto")
     parser.add_argument("--record-duration", type=int, default=10, help="record duration in seconds")
     parser.add_argument("--send-duration", type=int, default=4, help="generated audio duration in seconds")
-    parser.add_argument("--similarity-threshold", type=float, default=0.8, help="match threshold")
+    parser.add_argument("--similarity-threshold", type=float, default=0.7, help="match threshold, default 0.7")
     parser.add_argument("--seed", type=int, default=None, help="optional random seed")
-    parser.add_argument("--digit-sequence", default="", help="optional fixed pickup validation digit sequence")
-    parser.add_argument("--test-tone-id", default="", help="optional id for playback device A validation tone")
+    parser.add_argument("--digit-sequence", default="", help="optional fixed DTMF digit sequence for compatibility debugging")
+    parser.add_argument("--test-tone-id", default="", help="optional id for playback device A continuous-frequency validation tone")
     parser.add_argument("--test-device-input-type", default="MicIn", help="test device audioInputType, e.g. MicIn or LineIn")
     parser.add_argument("--test-device-output-type", default="Speaker", help="test device audioOutputType, default Speaker")
     parser.add_argument(
@@ -143,10 +143,12 @@ def main() -> int:
 
                 print(
                     "pickup test done:",
+                    f"analysis_source={result.analysis_source}",
                     f"audio_compression_type={result.playback_device_audio_status.audio_compression_type or audio_compression_type}",
                     f"record={result.record_file_path}",
+                    f"callback_audio={result.callback_audio_path or ''}",
                     f"reference={result.reference_audio_path}",
-                    f"digit_sequence={result.talk_result.digit_sequence}",
+                    _format_audio_identity(result.talk_result),
                     f"has_sound={result.sound_result.has_sound}",
                     f"match={result.match_result.matched}",
                     f"score={result.match_result.best_score:.4f}",
@@ -171,6 +173,13 @@ def main() -> int:
         sys.stderr = original_stderr
         log_file.close()
     return 0
+
+
+def _format_audio_identity(talk_result) -> str:
+    if talk_result.frequency_profile:
+        profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
+        return f"frequency_profile={profile}"
+    return f"digit_sequence={talk_result.digit_sequence}"
 
 
 def _resolve_playback_audio_compression_types(

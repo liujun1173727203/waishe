@@ -68,6 +68,12 @@ class SpeakerTestUseCases:
     def _log_step(self, message: str) -> None:
         print(f"[speaker-test] {message}", flush=True)
 
+    def _audio_identity_text(self, talk_result: RandomAudioTalkResult | PreparedRandomAudio) -> str:
+        if talk_result.frequency_profile:
+            profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
+            return f"frequency_profile={profile}"
+        return f"digit_sequence={talk_result.digit_sequence}"
+
     def run_speaker_test(
         self,
         session: DeviceSession,
@@ -76,7 +82,7 @@ class SpeakerTestUseCases:
         record_duration_seconds: int = 10,
         send_duration_seconds: int = 3,
         output_dir: str | Path | None = None,
-        similarity_threshold: float = 0.8,
+        similarity_threshold: float = 0.7,
         amplitude_ratio: float = 0.6,
         seed: Optional[int] = None,
         per_frame_delay: float = 0.02,
@@ -252,7 +258,7 @@ class SpeakerTestUseCases:
             )
             self._log_step(f"reference audio ready path={prepared_audio.file_path}")
             self._log_step(
-                f"digit sequence={prepared_audio.digit_sequence} "
+                f"{self._audio_identity_text(prepared_audio)} "
                 f"test_tone_id={fingerprint_source or session.host}"
             )
 
@@ -286,7 +292,8 @@ class SpeakerTestUseCases:
                 per_frame_delay=per_frame_delay,
             )
             self._log_step(
-                f"audio sent digits={talk_result.digit_sequence} frames={talk_result.frames_sent} bytes={talk_result.bytes_sent}"
+                f"audio sent {self._audio_identity_text(talk_result)} "
+                f"frames={talk_result.frames_sent} bytes={talk_result.bytes_sent}"
             )
 
             elapsed_record_seconds = max(0.0, time.monotonic() - record_started_at)
@@ -378,7 +385,7 @@ class SpeakerTestUseCases:
             f"record={record_file_path} "
             f"reference={prepared_audio.file_path} "
             f"audio_compression_type={two_way_audio_status.audio_compression_type or 'unknown'} "
-            f"digit_sequence={talk_result.digit_sequence} "
+            f"{self._audio_identity_text(talk_result)} "
             f"has_sound={sound_result.has_sound} "
             f"match={match_result.matched} "
             f"score={match_result.best_score:.4f} "

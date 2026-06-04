@@ -13,6 +13,8 @@ DEFAULT_SAMPLE_RATE = 8000
 DEFAULT_CHANNELS = 1
 DEFAULT_SAMPLE_WIDTH = 2
 DEFAULT_FRAME_MS = 20
+CONTINUOUS_FREQUENCY_MIN_HZ = 700.0
+CONTINUOUS_FREQUENCY_MAX_HZ = 3600.0
 DTMF_FREQUENCIES = (697.0, 770.0, 852.0, 941.0, 1209.0, 1336.0, 1477.0)
 DTMF_LOW_FREQUENCIES = (697.0, 770.0, 852.0, 941.0)
 DTMF_HIGH_FREQUENCIES = (1209.0, 1336.0, 1477.0)
@@ -149,6 +151,14 @@ class RecordedVideoAnalyzer:
         rms_threshold: float = 300.0,
     ) -> SoundAnalysisResult:
         audio_path = self.extract_audio(video_path, extracted_audio_path)
+        return self.analyze_wav_sound_presence(audio_path, rms_threshold=rms_threshold)
+
+    def analyze_wav_sound_presence(
+        self,
+        audio_path: str | Path,
+        rms_threshold: float = 300.0,
+    ) -> SoundAnalysisResult:
+        audio_path = Path(audio_path)
         samples = self._read_wav_samples(audio_path)
         frame_rms = self._frame_rms_values(samples)
         # Treat any frame above threshold as evidence that audible sound exists.
@@ -174,6 +184,21 @@ class RecordedVideoAnalyzer:
         expected_digit_sequence: str = "",
     ) -> ReferenceAudioMatchResult:
         audio_path = self.extract_audio(video_path, extracted_audio_path)
+        return self.detect_reference_audio_in_wav(
+            audio_path=audio_path,
+            reference_audio_path=reference_audio_path,
+            score_threshold=score_threshold,
+            expected_digit_sequence=expected_digit_sequence,
+        )
+
+    def detect_reference_audio_in_wav(
+        self,
+        audio_path: str | Path,
+        reference_audio_path: str | Path,
+        score_threshold: float = 0.75,
+        expected_digit_sequence: str = "",
+    ) -> ReferenceAudioMatchResult:
+        audio_path = Path(audio_path)
         target_samples = self._read_wav_samples(audio_path)
         reference_samples = self._read_wav_samples(reference_audio_path)
 
@@ -186,6 +211,14 @@ class RecordedVideoAnalyzer:
         )
         # Use sliding-window signature matching to find where the reference best aligns.
         best_score, best_offset = self._best_signature_match(target_signature, reference_signature)
+        continuous_score, continuous_offset = self._continuous_frequency_match_score(
+            target_samples=target_samples,
+            reference_samples=reference_samples,
+        )
+        projection_score, projection_offset = self._time_domain_projection_match_score(
+            target_samples=target_samples,
+            reference_samples=reference_samples,
+        )
         detected_digit_sequence = self._decode_dtmf_sequence(target_samples)
         sequence_score, sequence_offset = self._expected_digit_sequence_match_score(
             target_samples=target_samples,
@@ -195,7 +228,11 @@ class RecordedVideoAnalyzer:
         digit_matched = bool(expected_digit_sequence and expected_digit_sequence in detected_digit_sequence)
         if sequence_score > best_score:
             best_offset = sequence_offset
-        final_score = max(best_score, sequence_score, 1.0 if digit_matched else 0.0)
+        if continuous_score > max(best_score, sequence_score, projection_score):
+            best_offset = continuous_offset
+        if projection_score > max(best_score, sequence_score, continuous_score):
+            best_offset = projection_offset
+        final_score = max(best_score, sequence_score, continuous_score, projection_score, 1.0 if digit_matched else 0.0)
 
         return ReferenceAudioMatchResult(
             matched=final_score >= score_threshold,
@@ -415,6 +452,113 @@ class RecordedVideoAnalyzer:
                     best_score = score
                     best_offset = offset
         return best_score, best_offset
+
+    def _continuous_frequency_match_score(
+        self,
+        target_samples: list[int],
+        reference_samples: list[int],
+    ) -> tuple[float, int]:
+        reference_track = self._dominant_frequency_track(reference_samples)
+        target_chunks = self._frame_chunks(target_samples)
+        if not target_chunks or not reference_track or len(target_chunks) < len(reference_track):
+            return 0.0, -1
+
+        reference_active = [item for item in reference_track if item > 0]
+        if len(reference_active) < max(5, len(reference_track) // 4):
+            return 0.0, -1
+
+        best_score = 0.0
+        best_offset = -1
+        reference_length = len(reference_track)
+        for offset in range(0, len(target_chunks) - reference_length + 1):
+            scores: list[float] = []
+            for target_chunk, reference_frequency in zip(target_chunks[offset:offset + reference_length], reference_track):
+                if reference_frequency <= 0:
+                    continue
+                scores.append(self._frequency_presence_score(target_chunk, reference_frequency))
+            if not scores:
+                continue
+            strong_ratio = sum(1 for value in scores if value >= 0.55) / len(scores)
+            average_score = sum(scores) / len(scores)
+            score = 0.55 * strong_ratio + 0.45 * average_score
+            if score > best_score:
+                best_score = score
+                best_offset = offset
+        return best_score, best_offset
+
+    def _time_domain_projection_match_score(
+        self,
+        target_samples: list[int],
+        reference_samples: list[int],
+    ) -> tuple[float, int]:
+        if not target_samples or not reference_samples or len(target_samples) < len(reference_samples):
+            return 0.0, -1
+
+        reference_energy = sum(sample * sample for sample in reference_samples)
+        target_energy = sum(sample * sample for sample in target_samples)
+        if reference_energy <= 0 or target_energy <= 0:
+            return 0.0, -1
+
+        samples_per_frame = self.sample_rate * self.frame_ms // 1000
+        step = max(1, samples_per_frame)
+        best_score = 0.0
+        best_offset = -1
+        reference_length = len(reference_samples)
+        for offset in range(0, len(target_samples) - reference_length + 1, step):
+            window = target_samples[offset:offset + reference_length]
+            window_energy = sum(sample * sample for sample in window)
+            if window_energy <= 0:
+                continue
+            dot = sum(left * right for left, right in zip(window, reference_samples))
+            coefficient = dot / reference_energy
+            cosine = dot / math.sqrt(reference_energy * window_energy)
+            coefficient_score = max(0.0, 1.0 - abs(coefficient - 1.0) / 0.45)
+            cosine_score = max(0.0, min(1.0, (cosine - 0.20) / 0.25))
+            score = 0.70 * coefficient_score + 0.30 * cosine_score
+            if score > best_score:
+                best_score = score
+                best_offset = offset // step
+        return best_score, best_offset
+
+    def _frequency_presence_score(self, samples: list[int], frequency: float) -> float:
+        center_power = math.sqrt(self._goertzel_power(samples, frequency))
+        neighbor_offsets = (-450.0, -300.0, -200.0, 200.0, 300.0, 450.0)
+        neighbor_powers = [
+            math.sqrt(self._goertzel_power(samples, frequency + offset))
+            for offset in neighbor_offsets
+            if CONTINUOUS_FREQUENCY_MIN_HZ <= frequency + offset <= CONTINUOUS_FREQUENCY_MAX_HZ
+        ]
+        background = (sum(neighbor_powers) / len(neighbor_powers)) if neighbor_powers else 1.0
+        ratio = center_power / max(background, 1.0)
+        return max(0.0, min(1.0, (ratio - 0.9) / 1.6))
+
+    def _dominant_frequency_track(self, samples: list[int]) -> list[float]:
+        chunks = self._frame_chunks(samples)
+        if not chunks:
+            return []
+        frequencies = [
+            CONTINUOUS_FREQUENCY_MIN_HZ + index * 100.0
+            for index in range(
+                int((CONTINUOUS_FREQUENCY_MAX_HZ - CONTINUOUS_FREQUENCY_MIN_HZ) // 100) + 1
+            )
+        ]
+        track: list[float] = []
+        rms_values = self._frame_rms_values(samples)
+        rms_threshold = max(120.0, (max(rms_values) if rms_values else 0.0) * 0.08)
+        for chunk in chunks:
+            frame_rms = self._frame_rms_values(chunk)[0] if chunk else 0.0
+            if frame_rms < rms_threshold:
+                track.append(0.0)
+                continue
+            powers = [(frequency, self._goertzel_power(chunk, frequency)) for frequency in frequencies]
+            powers.sort(key=lambda item: item[1], reverse=True)
+            best_frequency, best_power = powers[0]
+            second_power = powers[1][1] if len(powers) > 1 else 0.0
+            if best_power <= max(second_power * 1.03, 1.0):
+                track.append(0.0)
+            else:
+                track.append(best_frequency)
+        return track
 
     def _reference_digit_labels(self, frame_rms: list[float], expected_digit_sequence: str) -> list[str]:
         if not frame_rms:
