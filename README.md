@@ -116,3 +116,28 @@ recordings/supplement_light_tests/<device-ip>/
 ```text
 supplement_light_ir_auto_50_10_18_117_22_20260605_101010.jpg
 ```
+
+## Linux 运行
+
+Python 业务代码支持 Windows 和 Linux。HCNetSDK 动态库必须使用与当前操作系统匹配的海康官方版本：
+
+- Windows 默认读取 `libs/win64/HCNetSDK.dll`。
+- Linux 默认读取 `libs/linux64/` 下的 `libhcnetsdk.so` 及配套 `.so` 文件。
+- 也可以通过环境变量 `HIKVISION_SDK_ROOT` 指定 SDK 根目录。
+
+Linux 示例：
+
+```bash
+export HIKVISION_SDK_ROOT=/opt/hikvision/HCNetSDK
+export LD_LIBRARY_PATH="$HIKVISION_SDK_ROOT:$HIKVISION_SDK_ROOT/HCNetSDKCom:$LD_LIBRARY_PATH"
+python3 demo_speaker_test.py --ffmpeg-path ffmpeg
+```
+
+Linux 运行要求：
+
+- 安装海康 Linux 64 位 HCNetSDK，不能使用仓库中的 Windows DLL。
+- 安装 `ffmpeg` 并确保可通过 PATH 执行。
+- SDK 根目录应包含 `libhcnetsdk.so`，配套组件放在 `HCNetSDKCom` 或 SDK 根目录。
+- Linux 路径使用 UTF-8 编码；Windows 路径继续使用 GBK 编码。
+
+更完整的 Linux 部署说明见 [docs/linux.md](docs/linux.md)。

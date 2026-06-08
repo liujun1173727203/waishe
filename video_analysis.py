@@ -53,12 +53,26 @@ class RecordedVideoAnalyzer:
         channels: int = DEFAULT_CHANNELS,
         frame_ms: int = DEFAULT_FRAME_MS,
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.ffmpeg_path = ffmpeg_path
         self.sample_rate = sample_rate
         self.channels = channels
         self.frame_ms = frame_ms
 
     def resolve_ffmpeg(self) -> str:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         configured = Path(self.ffmpeg_path)
         if configured.is_file():
             return str(configured.resolve())
@@ -82,6 +96,13 @@ class RecordedVideoAnalyzer:
         video_path: str | Path,
         output_path: str | Path | None = None,
     ) -> Path:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         video = Path(video_path).resolve()
         if not video.exists():
             raise FileNotFoundError(f"video file not found: {video}")
@@ -120,6 +141,13 @@ class RecordedVideoAnalyzer:
         extracted_audio_path: str | Path | None = None,
         rms_threshold: float = 300.0,
     ) -> SoundAnalysisResult:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         audio_path = self.extract_audio(video_path, extracted_audio_path)
         return self.analyze_wav_sound_presence(audio_path, rms_threshold=rms_threshold)
 
@@ -128,6 +156,13 @@ class RecordedVideoAnalyzer:
         audio_path: str | Path,
         rms_threshold: float = 300.0,
     ) -> SoundAnalysisResult:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         audio_path = Path(audio_path)
         samples = self._read_wav_samples(audio_path)
         frame_rms = self._frame_rms_values(samples)
@@ -152,6 +187,13 @@ class RecordedVideoAnalyzer:
         extracted_audio_path: str | Path | None = None,
         score_threshold: float = 0.75,
     ) -> ReferenceAudioMatchResult:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         audio_path = self.extract_audio(video_path, extracted_audio_path)
         return self.detect_reference_audio_in_wav(
             audio_path=audio_path,
@@ -165,6 +207,13 @@ class RecordedVideoAnalyzer:
         reference_audio_path: str | Path,
         score_threshold: float = 0.75,
     ) -> ReferenceAudioMatchResult:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         audio_path = Path(audio_path)
         target_samples = self._read_wav_samples(audio_path)
         reference_samples = self._read_wav_samples(reference_audio_path)
@@ -190,9 +239,23 @@ class RecordedVideoAnalyzer:
         )
 
     def _default_audio_output_path(self, video_path: Path) -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return Path.cwd() / "recordings" / "analysis" / f"{video_path.stem}.wav"
 
     def _read_wav_samples(self, wav_path: str | Path) -> list[int]:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         path = Path(wav_path)
         if not path.exists():
             raise FileNotFoundError(f"audio file not found: {path}")
@@ -217,6 +280,13 @@ class RecordedVideoAnalyzer:
         return samples
 
     def _frame_rms_values(self, samples: list[int]) -> list[float]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         samples_per_frame = self.sample_rate * self.frame_ms // 1000
         if samples_per_frame <= 0:
             raise VideoAnalysisError("invalid frame size")
@@ -231,6 +301,13 @@ class RecordedVideoAnalyzer:
         return values
 
     def _normalize_signature(self, values: list[float]) -> list[float]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if not values:
             return []
         # Remove mean and normalize energy so matching is less sensitive to gain changes.
@@ -246,6 +323,13 @@ class RecordedVideoAnalyzer:
         target_samples: list[int],
         reference_samples: list[int],
     ) -> tuple[float, int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         reference_track = self._dominant_frequency_track(reference_samples)
         target_chunks = self._frame_chunks(target_samples)
         if not target_chunks or not reference_track or len(target_chunks) < len(reference_track):
@@ -280,6 +364,13 @@ class RecordedVideoAnalyzer:
         target_samples: list[int],
         reference_samples: list[int],
     ) -> tuple[float, int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if not target_samples or not reference_samples or len(target_samples) < len(reference_samples):
             return 0.0, -1
 
@@ -314,6 +405,13 @@ class RecordedVideoAnalyzer:
         target_samples: list[int],
         reference_samples: list[int],
     ) -> tuple[float, int]:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         reference_chunks = self._frame_chunks(reference_samples)
         target_chunks = self._frame_chunks(target_samples)
         if not reference_chunks or not target_chunks or len(target_chunks) < len(reference_chunks):
@@ -347,6 +445,13 @@ class RecordedVideoAnalyzer:
         return best_score, best_offset
 
     def _reference_frequency_component_probes(self, reference_chunks: list[list[int]]) -> list[tuple[int, float]]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if not reference_chunks:
             return []
         probe_count = min(FREQUENCY_COMPONENT_PROBE_COUNT, len(reference_chunks))
@@ -370,6 +475,13 @@ class RecordedVideoAnalyzer:
         return probes
 
     def _dominant_continuous_frequency(self, samples: list[int]) -> float:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         if not samples:
             return 0.0
         frequencies = [
@@ -387,6 +499,13 @@ class RecordedVideoAnalyzer:
         return best_frequency
 
     def _frequency_component_presence_score(self, samples: list[int], frequency: float) -> float:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         if not samples or frequency <= 0:
             return 0.0
         center_power = max(
@@ -411,6 +530,13 @@ class RecordedVideoAnalyzer:
         return 0.55 * tone_score + 0.45 * ratio_score
 
     def _merge_neighbor_chunks(self, chunks: list[list[int]], center_index: int, radius: int) -> list[int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         start = max(0, center_index - radius)
         end = min(len(chunks), center_index + radius + 1)
         merged: list[int] = []
@@ -419,6 +545,13 @@ class RecordedVideoAnalyzer:
         return merged
 
     def _frequency_presence_score(self, samples: list[int], frequency: float) -> float:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         center_power = math.sqrt(self._goertzel_power(samples, frequency))
         neighbor_offsets = (-450.0, -300.0, -200.0, 200.0, 300.0, 450.0)
         neighbor_powers = [
@@ -431,6 +564,13 @@ class RecordedVideoAnalyzer:
         return max(0.0, min(1.0, (ratio - 0.9) / 1.6))
 
     def _dominant_frequency_track(self, samples: list[int]) -> list[float]:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         chunks = self._frame_chunks(samples)
         if not chunks:
             return []
@@ -459,6 +599,13 @@ class RecordedVideoAnalyzer:
         return track
 
     def _frame_chunks(self, samples: list[int]) -> list[list[int]]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         samples_per_frame = self.sample_rate * self.frame_ms // 1000
         if samples_per_frame <= 0:
             raise VideoAnalysisError("invalid frame size")
@@ -469,6 +616,13 @@ class RecordedVideoAnalyzer:
         ]
 
     def _goertzel_power(self, samples: list[int], frequency: float) -> float:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         coefficient = 2.0 * math.cos(2.0 * math.pi * frequency / self.sample_rate)
         previous = 0.0
         previous_2 = 0.0

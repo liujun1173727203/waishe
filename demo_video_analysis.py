@@ -7,6 +7,13 @@ from video_analysis import RecordedVideoAnalyzer, VideoAnalysisError
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="Analyze recorded video audio")
     parser.add_argument("--video", required=True, help="recorded video file path")
     parser.add_argument("--reference-audio", default="", help="optional random audio wav path for matching")

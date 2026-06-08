@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from datetime import datetime
-from ctypes import POINTER, Structure, byref, c_bool, c_byte, c_char, c_char_p, c_int, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
+from ctypes import POINTER, Structure, byref, c_bool, c_byte, c_char, c_char_p, c_int, c_int32, c_ubyte, c_uint16, c_uint32, c_void_p
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -35,7 +35,10 @@ LINK_MODE_TCP = 0
 LINK_MODE_UDP = 1
 
 SDK_BOOL = c_uint32
+SDK_LONG = c_int32
 XML_BUFFER_SIZE = 1024 * 1024
+IS_WINDOWS = os.name == "nt"
+CALLBACK_FACTORY = ctypes.WINFUNCTYPE if IS_WINDOWS else ctypes.CFUNCTYPE
 
 
 class HikvisionSDKError(RuntimeError):
@@ -46,6 +49,13 @@ class HikvisionSDKError(RuntimeError):
         error_message: Optional[str] = None,
         api_name: Optional[str] = None,
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         parts = [message]
         if api_name:
             parts.append(f"api={api_name}")
@@ -92,7 +102,7 @@ class NET_DVR_JPEGPARA(Structure):
 
 class NET_DVR_PREVIEWINFO(Structure):
     _fields_ = [
-        ("lChannel", c_long),
+        ("lChannel", SDK_LONG),
         ("dwStreamType", c_uint32),
         ("dwLinkMode", c_uint32),
         ("hPlayWnd", c_void_p),
@@ -185,7 +195,7 @@ class NET_DVR_USER_LOGIN_INFO(Structure):
         ("byUseUTCTime", c_ubyte),
         ("byLoginMode", c_ubyte),
         ("byHttps", c_ubyte),
-        ("iProxyID", c_long),
+        ("iProxyID", SDK_LONG),
         ("byVerifyMode", c_ubyte),
         ("byRes3", c_ubyte),
         ("bySupport", c_ubyte),
@@ -218,8 +228,8 @@ class NET_DVR_DEVICEINFO_V40(Structure):
     ]
 
 
-VOICE_DATA_CALLBACK = ctypes.WINFUNCTYPE(None, c_long, c_char_p, c_uint32, c_ubyte, c_void_p)
-REAL_DATA_CALLBACK = ctypes.WINFUNCTYPE(None, c_long, c_uint32, c_void_p, c_uint32, c_void_p)
+VOICE_DATA_CALLBACK = CALLBACK_FACTORY(None, SDK_LONG, c_char_p, c_uint32, c_ubyte, c_void_p)
+REAL_DATA_CALLBACK = CALLBACK_FACTORY(None, SDK_LONG, c_uint32, c_void_p, c_uint32, c_void_p)
 
 
 @dataclass(frozen=True)
@@ -250,16 +260,42 @@ class DeviceSession:
 
     @property
     def default_voice_channel(self) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return self.device_info.byStartDTalkChan or 1
 
     @property
     def default_preview_channel(self) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return self.device_info.byStartChan or 1
 
 
 class HikvisionVoiceSDK:
     def __init__(self, sdk_root: str | os.PathLike[str] | None = None) -> None:
-        self.sdk_root = Path(sdk_root or Path(__file__).resolve().parent / "libs" / "win64").resolve()
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
+        default_platform_dir = "win64" if IS_WINDOWS else "linux64"
+        configured_root = sdk_root or os.environ.get("HIKVISION_SDK_ROOT")
+        self.sdk_root = Path(
+            configured_root or Path(__file__).resolve().parent / "libs" / default_platform_dir
+        ).resolve()
+        self.path_encoding = "gbk" if IS_WINDOWS else "utf-8"
         self._sdk = None
         self._initialized = False
         self._cleanup_registered = False
@@ -267,6 +303,13 @@ class HikvisionVoiceSDK:
         self._active_callbacks: dict[int, VOICE_DATA_CALLBACK] = {}
 
     def initialize(self, enable_log: bool = False, log_dir: str | os.PathLike[str] | None = None) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         with self._lock:
             if self._initialized:
                 return
@@ -278,13 +321,20 @@ class HikvisionVoiceSDK:
             if enable_log:
                 target = Path(log_dir or Path.cwd() / "SdkLog")
                 target.mkdir(parents=True, exist_ok=True)
-                self._sdk.NET_DVR_SetLogToFile(3, str(target).encode("gbk", errors="ignore"), False)
+                self._sdk.NET_DVR_SetLogToFile(3, self._encode_path(target), False)
             self._initialized = True
             if not self._cleanup_registered:
                 atexit.register(self.cleanup)
                 self._cleanup_registered = True
 
     def cleanup(self) -> None:
+        """
+        作用：停止指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         with self._lock:
             if not self._initialized or self._sdk is None:
                 return
@@ -293,6 +343,13 @@ class HikvisionVoiceSDK:
             self._initialized = False
 
     def get_last_error_info(self) -> dict[str, Optional[str | int]]:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         code = int(self._sdk.NET_DVR_GetLastError()) if self._sdk is not None else None
         return {
             "error_code": code,
@@ -300,6 +357,13 @@ class HikvisionVoiceSDK:
         }
 
     def login(self, host: str, port: int, username: str, password: str) -> DeviceSession:
+        """
+        作用：启动指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         self._require_initialized()
         login_info = NET_DVR_USER_LOGIN_INFO()
         login_info.sDeviceAddress = host.encode("ascii")
@@ -324,11 +388,25 @@ class HikvisionVoiceSDK:
         )
 
     def logout(self, session: DeviceSession) -> None:
+        """
+        作用：停止指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         self._require_initialized()
         if not self._sdk.NET_DVR_Logout(session.user_id):
             raise self._last_error("NET_DVR_Logout failed", "NET_DVR_Logout")
 
     def set_talk_mode(self, use_windows_api: bool = False) -> None:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         self._require_initialized()
         cfg = NET_DVR_LOCAL_TALK_MODE_CFG()
         cfg.byTalkMode = TALK_MODE_WINDOWS_API if use_windows_api else TALK_MODE_LIBRARY
@@ -336,6 +414,13 @@ class HikvisionVoiceSDK:
             raise self._last_error("NET_DVR_SetSDKLocalCfg(TALK_MODE) failed", "NET_DVR_SetSDKLocalCfg")
 
     def get_current_audio_compress(self, session: DeviceSession) -> AudioCompressInfo:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         self._require_initialized()
         compress = NET_DVR_COMPRESSION_AUDIO()
         if not self._sdk.NET_DVR_GetCurrentAudioCompress(session.user_id, byref(compress)):
@@ -348,6 +433,13 @@ class HikvisionVoiceSDK:
         )
 
     def set_audio_compress(self, session: DeviceSession, encode_type: int, sampling_rate: int = 0, bit_rate: int = 0) -> None:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         self._require_initialized()
         compress = NET_DVR_COMPRESSION_AUDIO()
         compress.byAudioEncType = encode_type
@@ -370,10 +462,24 @@ class HikvisionVoiceSDK:
         need_pcm_callback: bool = False,
         audio_callback: Optional[Callable[[bytes, int], None]] = None,
     ) -> "VoiceCall":
+        """
+        作用：启动指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         self._require_initialized()
         callback = None
         if audio_callback is not None:
             def _handler(_handle: int, buffer: bytes, audio_flag: int) -> None:
+                """
+                作用：作为内部辅助方法，完成本方法对应的数据处理。
+                执行步骤：
+                1. 接收并校验输入参数。
+                2. 执行方法职责对应的核心处理。
+                3. 返回处理结果，失败时抛出异常。
+                """
                 audio_callback(buffer, audio_flag)
 
             callback = _handler
@@ -393,6 +499,13 @@ class HikvisionVoiceSDK:
         voice_channel: Optional[int] = None,
         encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
     ) -> "VoiceForwardSession":
+        """
+        作用：启动指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         self._require_initialized()
         forward = VoiceForwardSession(
             sdk=self,
@@ -413,6 +526,13 @@ class HikvisionVoiceSDK:
         blocked: bool = True,
         real_data_callback: Optional[Callable[[int, int, bytes], None]] = None,
     ) -> "StreamRecorder":
+        """
+        作用：启动指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         self._require_initialized()
         target_channel = channel or session.default_preview_channel
         recorder = StreamRecorder(
@@ -439,7 +559,13 @@ class HikvisionVoiceSDK:
         jpeg_quality: int = 0,
         fallback_to_stream: bool = True,
     ) -> CapturePictureResult:
-        """Capture a picture, preferring device-side JPEG and falling back to stream capture."""
+        """
+        作用：执行抓图流程，保存图片并返回抓图结果。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._require_initialized()
         target_channel = channel or session.default_preview_channel
         target_path = Path(file_path) if file_path is not None else self._default_capture_picture_path(session.host, target_channel)
@@ -472,6 +598,13 @@ class HikvisionVoiceSDK:
         picture_size: int = 0xFF,
         quality: int = 0,
     ) -> Path:
+        """
+        作用：执行抓图流程，保存图片并返回抓图结果。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._require_initialized()
         target_channel = channel or session.default_preview_channel
         target_path = Path(file_path)
@@ -482,7 +615,7 @@ class HikvisionVoiceSDK:
         jpeg_para = NET_DVR_JPEGPARA()
         jpeg_para.wPicSize = picture_size
         jpeg_para.wPicQuality = quality
-        encoded_path = str(target_path.resolve()).encode("gbk", errors="ignore")
+        encoded_path = self._encode_path(target_path)
         if not self._sdk.NET_DVR_CaptureJPEGPicture(session.user_id, target_channel, byref(jpeg_para), encoded_path):
             raise self._last_error("NET_DVR_CaptureJPEGPicture failed", "NET_DVR_CaptureJPEGPicture")
         self._ensure_non_empty_file(target_path, "NET_DVR_CaptureJPEGPicture")
@@ -497,6 +630,13 @@ class HikvisionVoiceSDK:
         link_mode: int = LINK_MODE_TCP,
         wait_first_data_seconds: float = 5.0,
     ) -> Path:
+        """
+        作用：执行抓图流程，保存图片并返回抓图结果。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._require_initialized()
         target_channel = channel or session.default_preview_channel
         target_path = self._stream_capture_path(Path(file_path))
@@ -506,6 +646,13 @@ class HikvisionVoiceSDK:
         received_bytes = 0
 
         def _handle_real_data(_real_handle: int, _data_type: int, data: bytes) -> None:
+            """
+            作用：作为内部辅助方法，完成本方法对应的数据处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             nonlocal received_bytes
             if data:
                 received_bytes += len(data)
@@ -528,7 +675,7 @@ class HikvisionVoiceSDK:
         pending_error: Optional[BaseException] = None
         try:
             first_data_event.wait(wait_first_data_seconds)
-            encoded_path = str(target_path.resolve()).encode("gbk", errors="ignore")
+            encoded_path = self._encode_path(target_path)
             if not self._sdk.NET_DVR_CapturePicture(handle, encoded_path):
                 raise self._last_error("NET_DVR_CapturePicture failed", "NET_DVR_CapturePicture")
             self._ensure_non_empty_file(target_path, "NET_DVR_CapturePicture")
@@ -546,71 +693,184 @@ class HikvisionVoiceSDK:
                 self._forget_callback(handle)
 
     def _load_sdk(self) -> None:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         if not self.sdk_root.exists():
-            raise FileNotFoundError(f"SDK path not found: {self.sdk_root}")
-        os.add_dll_directory(str(self.sdk_root))
+            raise FileNotFoundError(
+                f"SDK path not found: {self.sdk_root}. "
+                "Set HIKVISION_SDK_ROOT or pass sdk_root to HikvisionVoiceSDK."
+            )
         com_dir = self.sdk_root / "HCNetSDKCom"
-        if com_dir.exists():
-            os.add_dll_directory(str(com_dir))
-        os.environ["PATH"] = f"{self.sdk_root};{com_dir};{os.environ.get('PATH', '')}"
-        self._sdk = ctypes.WinDLL(str(self.sdk_root / "HCNetSDK.dll"))
+        if IS_WINDOWS:
+            os.add_dll_directory(str(self.sdk_root))
+            if com_dir.exists():
+                os.add_dll_directory(str(com_dir))
+            os.environ["PATH"] = f"{self.sdk_root};{com_dir};{os.environ.get('PATH', '')}"
+            self._sdk = ctypes.WinDLL(str(self.sdk_root / "HCNetSDK.dll"))
+            return
+
+        self._preload_linux_dependencies(com_dir)
+        self._sdk = ctypes.CDLL(str(self._find_linux_library("hcnetsdk")), mode=ctypes.RTLD_GLOBAL)
 
     def _configure_init_paths(self) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         sdk_path = NET_DVR_LOCAL_SDK_PATH()
-        com_dir = str((self.sdk_root / "HCNetSDKCom").resolve()).encode("gbk", errors="ignore")
-        sdk_path.sPath = com_dir
+        component_dir = self.sdk_root / "HCNetSDKCom"
+        sdk_path.sPath = self._encode_path(component_dir if component_dir.exists() else self.sdk_root)
         if not self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_SDK_PATH, byref(sdk_path)):
             raise self._last_error("NET_DVR_SetSDKInitCfg(SDK_PATH) failed", "NET_DVR_SetSDKInitCfg")
-        crypto_path = str((self.sdk_root / "libcrypto-3-x64.dll").resolve()).encode("gbk", errors="ignore")
-        ssl_path = str((self.sdk_root / "libssl-3-x64.dll").resolve()).encode("gbk", errors="ignore")
-        self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_LIBEAY_PATH, c_char_p(crypto_path))
-        self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_SSLEAY_PATH, c_char_p(ssl_path))
+        crypto_path = self._find_first_existing_library(
+            ("libcrypto-3-x64.dll", "libcrypto-1_1-x64.dll")
+            if IS_WINDOWS
+            else ("libcrypto.so", "libcrypto.so.3", "libcrypto.so.1.1")
+        )
+        ssl_path = self._find_first_existing_library(
+            ("libssl-3-x64.dll", "libssl-1_1-x64.dll")
+            if IS_WINDOWS
+            else ("libssl.so", "libssl.so.3", "libssl.so.1.1")
+        )
+        if crypto_path is not None:
+            self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_LIBEAY_PATH, c_char_p(self._encode_path(crypto_path)))
+        if ssl_path is not None:
+            self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_SSLEAY_PATH, c_char_p(self._encode_path(ssl_path)))
+
+    def _encode_path(self, path: str | os.PathLike[str]) -> bytes:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
+        return str(Path(path).resolve()).encode(self.path_encoding, errors="ignore")
+
+    def _find_linux_library(self, token: str) -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
+        for candidate in self.sdk_root.rglob("*.so*"):
+            if candidate.is_file() and token.lower() in candidate.name.lower():
+                return candidate.resolve()
+        raise FileNotFoundError(
+            f"Linux SDK library containing '{token}' not found under {self.sdk_root}. "
+            "Install Hikvision Linux HCNetSDK into libs/linux64 or set HIKVISION_SDK_ROOT."
+        )
+
+    def _preload_linux_dependencies(self, com_dir: Path) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
+        search_dirs = [self.sdk_root]
+        if com_dir.exists():
+            search_dirs.append(com_dir)
+        for directory in search_dirs:
+            for library in sorted(directory.glob("*.so*")):
+                try:
+                    ctypes.CDLL(str(library.resolve()), mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    continue
+
+    def _find_first_existing_library(self, names: tuple[str, ...]) -> Optional[Path]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
+        search_dirs = [self.sdk_root, self.sdk_root / "HCNetSDKCom", self.sdk_root / "ClientDemoDll"]
+        for directory in search_dirs:
+            for name in names:
+                candidate = directory / name
+                if candidate.is_file():
+                    return candidate.resolve()
+        return None
 
     def _bind_functions(self) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._sdk.NET_DVR_Init.restype = c_bool
         self._sdk.NET_DVR_Cleanup.restype = c_bool
         self._sdk.NET_DVR_GetLastError.restype = c_uint32
-        self._sdk.NET_DVR_GetErrorMsg.argtypes = [POINTER(c_long)]
+        self._sdk.NET_DVR_GetErrorMsg.argtypes = [POINTER(SDK_LONG)]
         self._sdk.NET_DVR_GetErrorMsg.restype = c_char_p
         self._sdk.NET_DVR_Login_V40.argtypes = [POINTER(NET_DVR_USER_LOGIN_INFO), POINTER(NET_DVR_DEVICEINFO_V40)]
-        self._sdk.NET_DVR_Login_V40.restype = c_long
-        self._sdk.NET_DVR_Logout.argtypes = [c_long]
+        self._sdk.NET_DVR_Login_V40.restype = SDK_LONG
+        self._sdk.NET_DVR_Logout.argtypes = [SDK_LONG]
         self._sdk.NET_DVR_Logout.restype = c_bool
-        self._sdk.NET_DVR_SetSDKInitCfg.argtypes = [c_long, c_void_p]
+        self._sdk.NET_DVR_SetSDKInitCfg.argtypes = [SDK_LONG, c_void_p]
         self._sdk.NET_DVR_SetSDKInitCfg.restype = c_bool
-        self._sdk.NET_DVR_SetSDKLocalCfg.argtypes = [c_long, c_void_p]
+        self._sdk.NET_DVR_SetSDKLocalCfg.argtypes = [SDK_LONG, c_void_p]
         self._sdk.NET_DVR_SetSDKLocalCfg.restype = c_bool
-        self._sdk.NET_DVR_SetLogToFile.argtypes = [c_long, c_char_p, c_bool]
+        self._sdk.NET_DVR_SetLogToFile.argtypes = [SDK_LONG, c_char_p, c_bool]
         self._sdk.NET_DVR_SetLogToFile.restype = c_bool
-        self._sdk.NET_DVR_GetCurrentAudioCompress.argtypes = [c_long, POINTER(NET_DVR_COMPRESSION_AUDIO)]
+        self._sdk.NET_DVR_GetCurrentAudioCompress.argtypes = [SDK_LONG, POINTER(NET_DVR_COMPRESSION_AUDIO)]
         self._sdk.NET_DVR_GetCurrentAudioCompress.restype = c_bool
-        self._sdk.NET_DVR_SetDVRConfig.argtypes = [c_long, c_uint32, c_long, c_void_p, c_uint32]
+        self._sdk.NET_DVR_SetDVRConfig.argtypes = [SDK_LONG, c_uint32, SDK_LONG, c_void_p, c_uint32]
         self._sdk.NET_DVR_SetDVRConfig.restype = c_bool
-        self._sdk.NET_DVR_StartVoiceCom_V30.argtypes = [c_long, c_uint32, c_bool, VOICE_DATA_CALLBACK, c_void_p]
-        self._sdk.NET_DVR_StartVoiceCom_V30.restype = c_long
-        self._sdk.NET_DVR_StartVoiceCom_MR_V30.argtypes = [c_long, c_uint32, VOICE_DATA_CALLBACK, c_void_p]
-        self._sdk.NET_DVR_StartVoiceCom_MR_V30.restype = c_long
-        self._sdk.NET_DVR_StopVoiceCom.argtypes = [c_long]
+        self._sdk.NET_DVR_StartVoiceCom_V30.argtypes = [SDK_LONG, c_uint32, c_bool, VOICE_DATA_CALLBACK, c_void_p]
+        self._sdk.NET_DVR_StartVoiceCom_V30.restype = SDK_LONG
+        self._sdk.NET_DVR_StartVoiceCom_MR_V30.argtypes = [SDK_LONG, c_uint32, VOICE_DATA_CALLBACK, c_void_p]
+        self._sdk.NET_DVR_StartVoiceCom_MR_V30.restype = SDK_LONG
+        self._sdk.NET_DVR_StopVoiceCom.argtypes = [SDK_LONG]
         self._sdk.NET_DVR_StopVoiceCom.restype = c_bool
-        self._sdk.NET_DVR_VoiceComSendData.argtypes = [c_long, c_void_p, c_uint32]
+        self._sdk.NET_DVR_VoiceComSendData.argtypes = [SDK_LONG, c_void_p, c_uint32]
         self._sdk.NET_DVR_VoiceComSendData.restype = c_bool
-        self._sdk.NET_DVR_RealPlay_V40.argtypes = [c_long, POINTER(NET_DVR_PREVIEWINFO), REAL_DATA_CALLBACK, c_void_p]
-        self._sdk.NET_DVR_RealPlay_V40.restype = c_long
-        self._sdk.NET_DVR_StopRealPlay.argtypes = [c_long]
+        self._sdk.NET_DVR_RealPlay_V40.argtypes = [SDK_LONG, POINTER(NET_DVR_PREVIEWINFO), REAL_DATA_CALLBACK, c_void_p]
+        self._sdk.NET_DVR_RealPlay_V40.restype = SDK_LONG
+        self._sdk.NET_DVR_StopRealPlay.argtypes = [SDK_LONG]
         self._sdk.NET_DVR_StopRealPlay.restype = c_bool
-        self._sdk.NET_DVR_SaveRealData.argtypes = [c_long, c_char_p]
+        self._sdk.NET_DVR_SaveRealData.argtypes = [SDK_LONG, c_char_p]
         self._sdk.NET_DVR_SaveRealData.restype = c_bool
-        self._sdk.NET_DVR_StopSaveRealData.argtypes = [c_long]
+        self._sdk.NET_DVR_StopSaveRealData.argtypes = [SDK_LONG]
         self._sdk.NET_DVR_StopSaveRealData.restype = c_bool
-        self._sdk.NET_DVR_CaptureJPEGPicture.argtypes = [c_long, c_long, POINTER(NET_DVR_JPEGPARA), c_char_p]
+        self._sdk.NET_DVR_CaptureJPEGPicture.argtypes = [SDK_LONG, SDK_LONG, POINTER(NET_DVR_JPEGPARA), c_char_p]
         self._sdk.NET_DVR_CaptureJPEGPicture.restype = c_bool
-        self._sdk.NET_DVR_CapturePicture.argtypes = [c_long, c_char_p]
+        self._sdk.NET_DVR_CapturePicture.argtypes = [SDK_LONG, c_char_p]
         self._sdk.NET_DVR_CapturePicture.restype = c_bool
-        self._sdk.NET_DVR_STDXMLConfig.argtypes = [c_long, POINTER(NET_DVR_XML_CONFIG_INPUT), POINTER(NET_DVR_XML_CONFIG_OUTPUT)]
+        self._sdk.NET_DVR_STDXMLConfig.argtypes = [SDK_LONG, POINTER(NET_DVR_XML_CONFIG_INPUT), POINTER(NET_DVR_XML_CONFIG_OUTPUT)]
         self._sdk.NET_DVR_STDXMLConfig.restype = c_bool
 
     def _build_callback(self, callback: Optional[Callable[[int, bytes, int], None]]) -> VOICE_DATA_CALLBACK:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         def _wrapped(voice_handle: int, recv_buffer: bytes, buf_size: int, audio_flag: int, _user: int) -> None:
+            """
+            作用：作为内部辅助方法，完成本方法对应的数据处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             if callback is None or not recv_buffer or buf_size == 0:
                 return
             data = ctypes.string_at(recv_buffer, buf_size)
@@ -619,13 +879,41 @@ class HikvisionVoiceSDK:
         return VOICE_DATA_CALLBACK(_wrapped)
 
     def _remember_callback(self, handle: int, callback: VOICE_DATA_CALLBACK) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._active_callbacks[handle] = callback
 
     def _forget_callback(self, handle: int) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._active_callbacks.pop(handle, None)
 
     def _build_real_data_callback(self, callback: Optional[Callable[[int, int, bytes], None]]) -> REAL_DATA_CALLBACK:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         def _wrapped(real_handle: int, data_type: int, buffer_ptr: int, buf_size: int, _user: int) -> None:
+            """
+            作用：作为内部辅助方法，完成本方法对应的数据处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             if callback is None or not buffer_ptr or buf_size == 0:
                 return
             data = ctypes.string_at(buffer_ptr, buf_size)
@@ -634,22 +922,50 @@ class HikvisionVoiceSDK:
         return REAL_DATA_CALLBACK(_wrapped)
 
     def _default_stream_record_path(self, host: str, channel: int) -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return Path.cwd() / "recordings" / "streams" / host_dir / f"stream_ch{channel}_{timestamp}.mp4"
 
     def _default_capture_picture_path(self, host: str, channel: int) -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return Path.cwd() / "recordings" / "captures" / host_dir / f"capture_ch{channel}_{timestamp}.jpg"
 
     def _stream_capture_path(self, file_path: Path) -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if file_path.suffix.lower() == ".bmp":
             return file_path
         suffix = file_path.suffix or ".jpg"
         return file_path.with_name(f"{file_path.stem}_stream").with_suffix(".bmp" if suffix.lower() != ".bmp" else suffix)
 
     def _ensure_non_empty_file(self, file_path: Path, api_name: str) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         deadline = time.time() + 2.0
         while time.time() < deadline:
             if file_path.exists() and file_path.stat().st_size > 0:
@@ -665,6 +981,13 @@ class HikvisionVoiceSDK:
         body: str | None = None,
         timeout_ms: int = 5000,
     ) -> tuple[str, str]:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._require_initialized()
         request_line = f"{method.upper()} {path}"
         request_bytes = request_line.encode("ascii")
@@ -700,22 +1023,43 @@ class HikvisionVoiceSDK:
 
 
     def _require_initialized(self) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if not self._initialized or self._sdk is None:
             raise HikvisionSDKError("SDK not initialized")
 
     def _get_error_message(self, error_code: Optional[int] = None) -> Optional[str]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self._sdk is None:
             return None
-        code = c_long(-1 if error_code is None else int(error_code))
+        code = SDK_LONG(-1 if error_code is None else int(error_code))
         raw = self._sdk.NET_DVR_GetErrorMsg(byref(code))
         if not raw:
             return None
         try:
-            return raw.decode("gbk")
+            return raw.decode(self.path_encoding)
         except UnicodeDecodeError:
             return raw.decode("utf-8", errors="ignore")
 
     def _last_error(self, message: str, api_name: Optional[str] = None) -> HikvisionSDKError:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         code = int(self._sdk.NET_DVR_GetLastError()) if self._sdk is not None else None
         return HikvisionSDKError(message, code, self._get_error_message(code), api_name)
 
@@ -729,6 +1073,13 @@ class VoiceCall:
         need_pcm_callback: bool,
         audio_callback: Optional[Callable[[int, bytes, int], None]],
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.sdk = sdk
         self.session = session
         self.voice_channel = voice_channel
@@ -737,6 +1088,13 @@ class VoiceCall:
         self.handle: Optional[int] = None
 
     def start(self) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self.handle is not None:
             return
         callback = self.sdk._build_callback(self.audio_callback)
@@ -753,6 +1111,13 @@ class VoiceCall:
         self.sdk._remember_callback(handle, callback)
 
     def stop(self) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self.handle is None:
             return
         handle = self.handle
@@ -762,10 +1127,24 @@ class VoiceCall:
         self.sdk._forget_callback(handle)
 
     def __enter__(self) -> "VoiceCall":
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.start()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.stop()
 
 
@@ -777,6 +1156,13 @@ class VoiceForwardSession:
         voice_channel: int,
         encoded_audio_callback: Optional[Callable[[bytes, int], None]],
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.sdk = sdk
         self.session = session
         self.voice_channel = voice_channel
@@ -784,10 +1170,24 @@ class VoiceForwardSession:
         self.handle: Optional[int] = None
 
     def start(self) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self.handle is not None:
             return
 
         def _handler(_voice_handle: int, data: bytes, audio_flag: int) -> None:
+            """
+            作用：作为内部辅助方法，完成本方法对应的数据处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             if self.encoded_audio_callback is not None:
                 self.encoded_audio_callback(data, audio_flag)
 
@@ -804,6 +1204,13 @@ class VoiceForwardSession:
         self.sdk._remember_callback(handle, callback)
 
     def send_encoded_audio(self, data: bytes) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self.handle is None:
             raise HikvisionSDKError("Voice forwarding session not started")
         if not data:
@@ -817,6 +1224,13 @@ class VoiceForwardSession:
             raise self.sdk._last_error("NET_DVR_VoiceComSendData failed", "NET_DVR_VoiceComSendData")
 
     def stop(self) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self.handle is None:
             return
         handle = self.handle
@@ -826,10 +1240,24 @@ class VoiceForwardSession:
         self.sdk._forget_callback(handle)
 
     def __enter__(self) -> "VoiceForwardSession":
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.start()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.stop()
 
 
@@ -845,6 +1273,13 @@ class StreamRecorder:
         blocked: bool,
         real_data_callback: Optional[Callable[[int, int, bytes], None]],
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.sdk = sdk
         self.session = session
         self.file_path = file_path
@@ -860,6 +1295,13 @@ class StreamRecorder:
         self._first_data_event = threading.Event()
 
     def start(self) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self.handle is not None:
             return
 
@@ -873,6 +1315,13 @@ class StreamRecorder:
         preview_info.bPassbackRecord = False
 
         def _handle_real_data(real_handle: int, data_type: int, data: bytes) -> None:
+            """
+            作用：作为内部辅助方法，完成本方法对应的数据处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             if data:
                 self._received_bytes += len(data)
                 self._received_packets += 1
@@ -890,7 +1339,7 @@ class StreamRecorder:
         if handle < 0:
             raise self.sdk._last_error("NET_DVR_RealPlay_V40 failed", "NET_DVR_RealPlay_V40")
 
-        encoded_path = str(self.file_path.resolve()).encode("gbk", errors="ignore")
+        encoded_path = self.sdk._encode_path(self.file_path)
         if not self.sdk._sdk.NET_DVR_SaveRealData(handle, encoded_path):
             self.sdk._sdk.NET_DVR_StopRealPlay(handle)
             raise self.sdk._last_error("NET_DVR_SaveRealData failed", "NET_DVR_SaveRealData")
@@ -900,10 +1349,24 @@ class StreamRecorder:
         self.sdk._remember_callback(handle, callback)
 
     def stop(self, log_callback: Optional[Callable[[str], None]] = None) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self.handle is None:
             return
 
         def _log(message: str) -> None:
+            """
+            作用：作为内部辅助方法，完成本方法对应的数据处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             if log_callback is not None:
                 log_callback(message)
 
@@ -949,6 +1412,13 @@ class StreamRecorder:
             raise errors[0]
 
     def stop_save_real_data(self) -> None:
+        """
+        作用：停止指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         if self.handle is None or not self._saving:
             return
         self._saving = False
@@ -956,6 +1426,13 @@ class StreamRecorder:
             raise self.sdk._last_error("NET_DVR_StopSaveRealData failed", "NET_DVR_StopSaveRealData")
 
     def stop_real_play(self) -> None:
+        """
+        作用：停止指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         if self.handle is None:
             return
         handle = self.handle
@@ -966,22 +1443,57 @@ class StreamRecorder:
 
     @property
     def received_bytes(self) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return self._received_bytes
 
     @property
     def file_size_bytes(self) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if not self.file_path.exists():
             return 0
         return self.file_path.stat().st_size
 
     def wait_for_first_data(self, timeout_seconds: float = 5.0) -> bool:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return self._first_data_event.wait(timeout_seconds)
 
     def __enter__(self) -> "StreamRecorder":
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.start()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.stop()
 
 

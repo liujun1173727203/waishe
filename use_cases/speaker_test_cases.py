@@ -58,6 +58,13 @@ class SpeakerTestUseCases:
         voice_talk_use_cases: Optional[VoiceTalkUseCases] = None,
         recorder_device: Optional[RecorderDeviceConfig] = None,
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.sdk = sdk
         self.recorder_sdk = recorder_sdk or sdk
         self.isapi = isapi
@@ -66,9 +73,23 @@ class SpeakerTestUseCases:
         self.recorder_device = recorder_device or RecorderDeviceConfig()
 
     def _log_step(self, message: str) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         print(f"[speaker-test] {message}", flush=True)
 
     def _audio_identity_text(self, talk_result: RandomAudioTalkResult | PreparedRandomAudio) -> str:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
         return f"frequency_profile={profile}"
 
@@ -88,6 +109,13 @@ class SpeakerTestUseCases:
         test_device_output_type: str = "Speaker",
         audio_compression_type: Optional[str] = None,
     ) -> SpeakerTestResult:
+        """
+        作用：编排并执行完整业务或测试用例，生成执行结果。
+        执行步骤：
+        1. 解析输入参数并准备依赖对象。
+        2. 按业务流程顺序执行核心步骤。
+        3. 输出日志、执行结果或退出码。
+        """
         if record_duration_seconds <= 0:
             raise ValueError("record_duration_seconds must be positive")
         if send_duration_seconds <= 0:
@@ -401,10 +429,24 @@ class SpeakerTestUseCases:
         )
 
     def _default_output_dir(self, host: str) -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         return Path.cwd() / "recordings" / "speaker_tests" / host_dir
 
     def _wait_for_record_file(self, record_file_path: Path, timeout_seconds: float = 2.0) -> int:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         deadline = time.time() + timeout_seconds
         size = 0
         while time.time() < deadline:
@@ -416,20 +458,48 @@ class SpeakerTestUseCases:
         return size
 
     def _input_type_supported(self, status: TwoWayAudioChannelStatus, input_type: str) -> bool:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if input_type == "MicIn":
             return status.micin_supported
         return input_type in status.input_type_options
 
     def _output_type_supported(self, status: TwoWayAudioChannelStatus, output_type: str) -> bool:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if output_type == "Speaker":
             return status.speaker_supported
         return output_type in status.output_type_options
 
     def _audio_compression_type_supported(self, status: TwoWayAudioChannelStatus, audio_compression_type: str) -> bool:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return (
             not status.audio_compression_type_options
             or audio_compression_type in status.audio_compression_type_options
         )
 
     def _filename_token(self, value: str) -> str:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return "".join(char if char.isalnum() or char in "._-" else "_" for char in value).strip("_") or "unknown"

@@ -13,11 +13,25 @@ from video_analysis import RecordedVideoAnalyzer, VideoAnalysisError
 
 class TimestampTee:
     def __init__(self, stream, log_file) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._stream = stream
         self._log_file = log_file
         self._buffer = ""
 
     def write(self, data: str) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if not data:
             return 0
         self._buffer += data
@@ -27,6 +41,13 @@ class TimestampTee:
         return len(data)
 
     def flush(self) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self._buffer:
             self._write_line(self._buffer, newline=False)
             self._buffer = ""
@@ -35,9 +56,23 @@ class TimestampTee:
 
     @property
     def encoding(self):
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return getattr(self._stream, "encoding", None)
 
     def _write_line(self, line: str, newline: bool) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         timestamped = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {line}"
         suffix = "\n" if newline else ""
         self._stream.write(timestamped + suffix)
@@ -45,11 +80,25 @@ class TimestampTee:
 
 
 def _default_output_dir(host: str) -> Path:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
     return Path.cwd() / "recordings" / "pickup_tests" / host_dir
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="Pickup test: record test device MicIn while playback device A plays audio")
     parser.add_argument("--host", default="10.18.117.22", help="test device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="test device sdk port")
@@ -68,7 +117,7 @@ def main() -> int:
         default="auto",
         help="comma separated playback device A audioCompressionType list, default auto means iterate supported options",
     )
-    parser.add_argument("--ffmpeg-path", default=r"D:\ffmpeg\ffmpeg-2026-05-28-git-7b46c6a2a3-essentials_build\bin\ffmpeg.exe", help="ffmpeg executable path")
+    parser.add_argument("--ffmpeg-path", default="ffmpeg", help="ffmpeg executable path")
     parser.add_argument("--playback-host", default="10.40.230.23", help="playback device A ip or hostname")
     parser.add_argument("--playback-port", type=int, default=8000, help="playback device A sdk port")
     parser.add_argument("--playback-username", default="admin", help="playback device A username")
@@ -213,6 +262,13 @@ def main() -> int:
 
 
 def _format_audio_identity(talk_result) -> str:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
     return f"frequency_profile={profile}"
 
@@ -226,6 +282,13 @@ def _resolve_playback_audio_compression_types(
     password: str,
     requested: str,
 ) -> list[str]:
+    """
+    作用：读取配置、设备或运行状态，并转换为结构化结果。
+    执行步骤：
+    1. 读取输入参数、配置或设备响应。
+    2. 解析并校验目标字段。
+    3. 返回解析后的结构化结果。
+    """
     if requested.strip().lower() != "auto":
         values = [item.strip() for item in requested.split(",") if item.strip()]
         if not values:

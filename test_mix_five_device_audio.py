@@ -23,6 +23,13 @@ DEFAULT_DEVICE_IDS = (
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="Generate and mix five simulated discrete-frequency device audios")
     parser.add_argument("--duration", type=int, default=4, help="audio duration in seconds")
     parser.add_argument("--amplitude-ratio", type=float, default=0.16, help="single-device amplitude before mixing")
@@ -83,6 +90,13 @@ def main() -> int:
 
 
 def _pcm_bytes_to_samples(pcm_bytes: bytes) -> list[int]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     return [
         int.from_bytes(pcm_bytes[offset:offset + SAMPLE_WIDTH_BYTES], byteorder="little", signed=True)
         for offset in range(0, len(pcm_bytes), SAMPLE_WIDTH_BYTES)
@@ -90,6 +104,13 @@ def _pcm_bytes_to_samples(pcm_bytes: bytes) -> list[int]:
 
 
 def _mix_samples(tracks: list[list[int]]) -> list[int]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     if not tracks:
         return []
     max_len = max(len(track) for track in tracks)
@@ -101,6 +122,13 @@ def _mix_samples(tracks: list[list[int]]) -> list[int]:
 
 
 def _write_wav(path: Path, samples: list[int], sample_rate: int) -> None:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     pcm_bytes = b"".join(int(sample).to_bytes(SAMPLE_WIDTH_BYTES, byteorder="little", signed=True) for sample in samples)
     with wave.open(str(path), "wb") as wav_file:
@@ -111,6 +139,13 @@ def _write_wav(path: Path, samples: list[int], sample_rate: int) -> None:
 
 
 def _filename_token(value: str) -> str:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in value).strip("_") or "device"
 
 

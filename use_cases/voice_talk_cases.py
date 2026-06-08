@@ -49,6 +49,13 @@ class PreparedRandomAudio:
 
 class VoiceTalkUseCases:
     def __init__(self, sdk: HikvisionVoiceSDK) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.sdk = sdk
 
     def prepare_random_audio_file(
@@ -64,6 +71,13 @@ class VoiceTalkUseCases:
         encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
         fingerprint_source: Optional[str] = None,
     ) -> RandomAudioTalkResult:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
         if not 0 < amplitude_ratio <= 1:
@@ -110,6 +124,13 @@ class VoiceTalkUseCases:
         per_frame_delay: float = FRAME_MS / 1000.0,
         encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
     ) -> RandomAudioTalkResult:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         bytes_sent = 0
         frames_sent = 0
         with self.sdk.start_voice_forward(
@@ -134,6 +155,13 @@ class VoiceTalkUseCases:
         )
 
     def split_prepared_audio_frames(self, prepared_audio: PreparedRandomAudio) -> list[bytes]:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return self._split_encoded_frames(prepared_audio.encoded_bytes, prepared_audio.encode_type)
 
     def play_random_audio_file(
@@ -149,6 +177,13 @@ class VoiceTalkUseCases:
         encoded_audio_callback: Optional[Callable[[bytes, int], None]] = None,
         fingerprint_source: Optional[str] = None,
     ) -> RandomAudioTalkResult:
+        """
+        作用：编排并执行完整业务或测试用例，生成执行结果。
+        执行步骤：
+        1. 解析输入参数并准备依赖对象。
+        2. 按业务流程顺序执行核心步骤。
+        3. 输出日志、执行结果或退出码。
+        """
         prepared_audio = self.prepare_random_audio_file(
             session=session,
             duration_seconds=duration_seconds,
@@ -178,7 +213,13 @@ class VoiceTalkUseCases:
         max_frequency: float = 3200.0,
         segment_count: int = 8,
     ) -> tuple[bytes, tuple[float, ...]]:
-        """Generate discrete wide-span frequency tones for device-fingerprint validation."""
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
         if not 0 < amplitude_ratio <= 1:
@@ -222,12 +263,26 @@ class VoiceTalkUseCases:
         return pcm_bytes, tuple(frequencies)
 
     def _build_output_path(self, host: str, output_dir: str | Path | None, prefix: str = "random_audio") -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         base_dir = Path(output_dir) if output_dir is not None else Path.cwd() / "recordings" / "use_cases" / host_dir
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return base_dir / f"{prefix}_{timestamp}.wav"
 
     def _fingerprint_bytes(self, fingerprint_source: str, seed: Optional[int]) -> bytes:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         source = f"{fingerprint_source}|{'' if seed is None else seed}"
         return hashlib.sha256(source.encode("utf-8")).digest()
 
@@ -238,6 +293,13 @@ class VoiceTalkUseCases:
         max_frequency: float,
         segment_count: int,
     ) -> list[float]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         span = max_frequency - min_frequency
         low_band = min_frequency + span * 0.05
         high_band = min_frequency + span * 0.95
@@ -264,6 +326,13 @@ class VoiceTalkUseCases:
         frequencies: list[float],
         amplitude: int,
     ) -> list[int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         samples: list[int] = []
         phase = 0.0
         segment_count = len(frequencies)
@@ -291,6 +360,13 @@ class VoiceTalkUseCases:
         return samples
 
     def _encode_pcm_for_device(self, pcm_bytes: bytes, encode_type: int) -> bytes:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if encode_type == PCM:
             return pcm_bytes
         if encode_type == G711_U:
@@ -300,6 +376,13 @@ class VoiceTalkUseCases:
         raise HikvisionSDKError("Unsupported encode type", error_message=f"encode_type={encode_type}")
 
     def _split_encoded_frames(self, encoded_bytes: bytes, encode_type: int) -> list[bytes]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         frame_size = PCM_BYTES_PER_FRAME if encode_type == PCM else SAMPLES_PER_FRAME
         frames = [
             encoded_bytes[index:index + frame_size]
@@ -312,10 +395,24 @@ class VoiceTalkUseCases:
 
     @staticmethod
     def _read_sample(pcm_bytes: bytes, offset: int) -> int:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         return int.from_bytes(pcm_bytes[offset:offset + 2], byteorder="little", signed=True)
 
     @staticmethod
     def _linear_to_ulaw(sample: int) -> int:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         bias = 0x84
         clip = 32635
 
@@ -339,6 +436,13 @@ class VoiceTalkUseCases:
 
     @staticmethod
     def _linear_to_alaw(sample: int) -> int:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         clip = 32767
         if sample > clip:
             sample = clip

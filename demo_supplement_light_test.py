@@ -12,11 +12,25 @@ from use_cases import SupplementLightUseCases
 
 class TimestampTee:
     def __init__(self, stream, log_file) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self._stream = stream
         self._log_file = log_file
         self._buffer = ""
 
     def write(self, data: str) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if not data:
             return 0
         self._buffer += data
@@ -26,6 +40,13 @@ class TimestampTee:
         return len(data)
 
     def flush(self) -> None:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if self._buffer:
             self._write_line(self._buffer, newline=False)
             self._buffer = ""
@@ -34,9 +55,23 @@ class TimestampTee:
 
     @property
     def encoding(self):
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return getattr(self._stream, "encoding", None)
 
     def _write_line(self, line: str, newline: bool) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         timestamped = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {line}"
         suffix = "\n" if newline else ""
         self._stream.write(timestamped + suffix)
@@ -44,11 +79,25 @@ class TimestampTee:
 
 
 def _default_output_dir(host: str) -> Path:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
     return Path.cwd() / "recordings" / "supplement_light_tests" / host_dir
 
 
 def _print_result(result) -> None:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     print(
         "补光灯通道测试完成:",
         f"图像通道={result.channel}",
@@ -92,6 +141,13 @@ def _print_result(result) -> None:
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="补光灯功能和效果自动化测试")
     parser.add_argument("--host", default="10.41.203.66", help="设备 IP 或主机名")
     parser.add_argument("--port", type=int, default=8000, help="SDK 端口")
@@ -105,7 +161,7 @@ def main() -> int:
     parser.add_argument("--level-threshold", type=float, default=5.0, help="效果有效性相邻强度亮度差阈值")
     parser.add_argument(
         "--ffmpeg-path",
-        default=r"D:\ffmpeg\ffmpeg-2026-05-28-git-7b46c6a2a3-essentials_build\bin\ffmpeg.exe",
+        default="ffmpeg",
         help="ffmpeg 可执行文件路径",
     )
     parser.add_argument("--enable-log", action="store_true", help="开启 SDK 日志")

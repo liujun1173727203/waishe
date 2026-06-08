@@ -8,6 +8,13 @@ from use_cases.voice_talk_cases import VoiceTalkUseCases, WIDEBAND_SAMPLE_RATE
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="Generate discrete wide-span frequency validation audio")
     parser.add_argument("--device-id", default="10.18.117.22", help="device/test tone id")
     parser.add_argument("--duration", type=int, default=4, help="audio duration in seconds")

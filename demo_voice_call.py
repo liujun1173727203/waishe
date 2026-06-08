@@ -8,6 +8,13 @@ from hikvision_voice import AUDIO_FLAG_LOCAL, HikvisionSDKError, HikvisionVoiceS
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="PC <-> Hikvision device voice talk demo")
     parser.add_argument("--host", default="10.41.203.51", help="device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")
@@ -37,6 +44,13 @@ def main() -> int:
         )
 
         def on_audio(data: bytes, audio_flag: int) -> None:
+            """
+            作用：执行本方法对应的业务处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             source = "local-mic" if audio_flag == AUDIO_FLAG_LOCAL else "device"
             print(f"[audio] source={source} bytes={len(data)}")
 

@@ -8,6 +8,13 @@ from use_cases import VoiceTalkUseCases
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="Send a device fingerprint audio file to device via voice talk")
     parser.add_argument("--host", default="10.18.117.22", help="device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="sdk port, default 8000")

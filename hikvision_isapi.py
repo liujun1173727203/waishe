@@ -14,10 +14,24 @@ ISAPI_SCHEMA = "http://www.isapi.org/ver20/XMLSchema"
 
 
 def _local_name(tag: str) -> str:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     return tag.rsplit("}", 1)[-1]
 
 
 def _find_first_by_local_name(root: ET.Element, local_name: str) -> Optional[ET.Element]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     for node in root.iter():
         if _local_name(node.tag) == local_name:
             return node
@@ -25,6 +39,13 @@ def _find_first_by_local_name(root: ET.Element, local_name: str) -> Optional[ET.
 
 
 def _child_tag_like(node: ET.Element, local_name: str) -> str:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     if node.tag.startswith("{"):
         namespace = node.tag.split("}", 1)[0][1:]
         return f"{{{namespace}}}{local_name}"
@@ -32,6 +53,13 @@ def _child_tag_like(node: ET.Element, local_name: str) -> str:
 
 
 def _namespace_of(node: ET.Element) -> Optional[str]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     if node.tag.startswith("{"):
         return node.tag.split("}", 1)[0][1:]
     return None
@@ -169,11 +197,25 @@ class HikvisionIsapiClient:
         scheme: str = "http",
         timeout_seconds: float = 5.0,
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.sdk = sdk
         self.scheme = scheme
         self.timeout_seconds = timeout_seconds
 
     def stream_type_to_track_suffix(self, stream_type: int) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         mapping = {
             STREAM_TYPE_MAIN: 1,
             1: 2,
@@ -181,9 +223,23 @@ class HikvisionIsapiClient:
         return mapping.get(stream_type, stream_type + 1)
 
     def track_stream_id(self, channel: int, stream_type: int) -> int:
+        """
+        作用：执行本方法对应的业务处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         return channel * 100 + self.stream_type_to_track_suffix(stream_type)
 
     def get_supported_image_channel_ids(self, session: DeviceSession) -> ImageChannelCapabilityStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         capability_path = "/ISAPI/System/capabilities?type=all"
         try:
             capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
@@ -231,6 +287,13 @@ class HikvisionIsapiClient:
         channel: Optional[int] = None,
         stream_type: int = STREAM_TYPE_MAIN,
     ) -> str:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
         return self._request_text(session, "GET", f"/ISAPI/Streaming/channels/{track_stream_id}/capabilities")
@@ -241,6 +304,13 @@ class HikvisionIsapiClient:
         channel: Optional[int] = None,
         stream_type: int = STREAM_TYPE_MAIN,
     ) -> str:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
         return self._request_text(session, "GET", f"/ISAPI/Streaming/channels/{track_stream_id}")
@@ -252,11 +322,25 @@ class HikvisionIsapiClient:
         channel: Optional[int] = None,
         stream_type: int = STREAM_TYPE_MAIN,
     ) -> str:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
         return self._request_text(session, "PUT", f"/ISAPI/Streaming/channels/{track_stream_id}", body=xml_body)
 
     def get_audio_input_capability_status(self, session: DeviceSession) -> AudioInputCapabilityStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         status = self.get_two_way_audio_channel_status(session)
         return AudioInputCapabilityStatus(
             supported=status.micin_supported,
@@ -268,6 +352,13 @@ class HikvisionIsapiClient:
         session: DeviceSession,
         channel: int = 1,
     ) -> TwoWayAudioChannelStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         capability_path = "/ISAPI/System/TwoWayAudio/channels/capabilities"
         config_path = f"/ISAPI/System/TwoWayAudio/channels/{channel}"
         capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
@@ -366,6 +457,13 @@ class HikvisionIsapiClient:
         maximize_microphone_volume: bool = False,
         maximize_speaker_volume: bool = False,
     ) -> TwoWayAudioChannelStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         status = self.get_two_way_audio_channel_status(session, channel=channel)
         if require_input_type == "MicIn" and not status.micin_supported:
             return status
@@ -452,6 +550,13 @@ class HikvisionIsapiClient:
         session: DeviceSession,
         channel: int = 1,
     ) -> TwoWayAudioChannelStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         return self.ensure_two_way_audio_channel_ready(
             session,
             channel=channel,
@@ -468,6 +573,13 @@ class HikvisionIsapiClient:
         channel: Optional[int] = None,
         stream_type: int = STREAM_TYPE_MAIN,
     ) -> CompositeStreamStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         target_channel = channel or session.default_preview_channel
         track_stream_id = self.track_stream_id(target_channel, stream_type)
 
@@ -499,6 +611,13 @@ class HikvisionIsapiClient:
         return CompositeStreamStatus(True, track_stream_id, True, True)
 
     def set_audio_input_volume_to_max(self, session: DeviceSession, channel: int = 1) -> AudioVolumeStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         return self._set_audio_volume_to_max(
             session=session,
             config_paths=[
@@ -512,6 +631,13 @@ class HikvisionIsapiClient:
         )
 
     def set_audio_output_volume_to_max(self, session: DeviceSession, channel: int = 1) -> AudioVolumeStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         return self._set_audio_volume_to_max(
             session=session,
             config_paths=[
@@ -531,6 +657,13 @@ class HikvisionIsapiClient:
         input_channel: int = 1,
         output_channel: int = 1,
     ) -> AudioIoVolumeStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         return AudioIoVolumeStatus(
             input_status=self.set_audio_input_volume_to_max(session, input_channel),
             output_status=self.set_audio_output_volume_to_max(session, output_channel),
@@ -541,6 +674,13 @@ class HikvisionIsapiClient:
         session: DeviceSession,
         channel: int = 1,
     ) -> MixedSupplementLightStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         capability_path = f"/ISAPI/Image/channels/{channel}/capabilities"
         config_path = f"/ISAPI/Image/channels/{channel}"
         capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
@@ -560,6 +700,13 @@ class HikvisionIsapiClient:
         regulation_options = self._node_options(capability_regulation)
 
         def config_int(name: str) -> int:
+            """
+            作用：执行本方法对应的业务处理。
+            执行步骤：
+            1. 接收并校验输入参数。
+            2. 执行方法职责对应的核心处理。
+            3. 返回处理结果，失败时抛出异常。
+            """
             node = _find_first_by_local_name(config_node, name)
             return self._safe_int(node.text if node is not None else None) or 0
 
@@ -593,6 +740,13 @@ class HikvisionIsapiClient:
         session: DeviceSession,
         channel: int,
     ) -> IrcutFilterStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         channel_capability_path = f"/ISAPI/Image/channels/{channel}/capabilities"
         common_capability_path = "/ISAPI/Image/channels/capabilities"
         config_path = f"/ISAPI/Image/channels/{channel}"
@@ -642,6 +796,13 @@ class HikvisionIsapiClient:
         channel: int,
         filter_type: str,
     ) -> IrcutFilterStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         status = self.get_ircut_filter_status(session, channel)
         if not status.supported:
             return status
@@ -678,6 +839,13 @@ class HikvisionIsapiClient:
         brightness: Optional[int] = None,
         prefer_manual: bool = True,
     ) -> MixedSupplementLightStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         status = self.get_mixed_supplement_light_status(session, channel=channel)
         if not status.supported:
             return status
@@ -712,6 +880,13 @@ class HikvisionIsapiClient:
         channel: int,
         status: MixedSupplementLightStatus,
     ) -> MixedSupplementLightStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         config_root = ET.fromstring(self._request_text(session, "GET", status.config_path))
         config_node = _find_first_by_local_name(config_root, "SupplementLight")
         if config_node is None:
@@ -735,6 +910,13 @@ class HikvisionIsapiClient:
         session: DeviceSession,
         channel: int = 1,
     ) -> IrLightCapabilityStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         capability_path = "/ISAPI/Image/channels/capabilities"
         try:
             capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
@@ -764,6 +946,13 @@ class HikvisionIsapiClient:
         session: DeviceSession,
         channel: int = 1,
     ) -> IrLightStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         capability = self.get_ir_light_capability_status(session, channel=channel)
         config_path = f"/ISAPI/Image/channels/{channel}"
         config_root = ET.fromstring(self._request_text(session, "GET", config_path))
@@ -809,6 +998,13 @@ class HikvisionIsapiClient:
         mode: str,
         brightness_limit: int,
     ) -> IrLightStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         status = self.get_ir_light_status(session, channel=channel)
         if not status.supported:
             return status
@@ -849,6 +1045,13 @@ class HikvisionIsapiClient:
         session: DeviceSession,
         channel: int = 1,
     ) -> SupplementLightStatus:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         capability_path = f"/ISAPI/Image/channels/{channel}/SupplementLight/capabilities"
         config_paths = [
             f"/ISAPI/Image/channels/{channel}/SupplementLight",
@@ -884,6 +1087,13 @@ class HikvisionIsapiClient:
         brightness: Optional[int] = None,
         mode: Optional[str] = "manual",
     ) -> SupplementLightStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         status = self.get_supplement_light_status(session, channel=channel)
         if not status.supported:
             return status
@@ -938,6 +1148,13 @@ class HikvisionIsapiClient:
         config_paths: list[str],
         capability_paths: list[str],
     ) -> AudioVolumeStatus:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         config_path, config_root = self._get_first_xml(session, config_paths)
         if config_root is None or config_path is None:
             return AudioVolumeStatus(False, False, 0, 0, "")
@@ -965,6 +1182,13 @@ class HikvisionIsapiClient:
         return AudioVolumeStatus(True, True, max_value, max_value, config_path)
 
     def _get_first_xml(self, session: DeviceSession, paths: list[str]) -> tuple[Optional[str], Optional[ET.Element]]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         for path in paths:
             try:
                 xml_text = self._request_text(session, "GET", path)
@@ -974,6 +1198,13 @@ class HikvisionIsapiClient:
         return None, None
 
     def _find_volume_max(self, session: DeviceSession, capability_paths: list[str]) -> Optional[int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         _path, cap_root = self._get_first_xml(session, capability_paths)
         if cap_root is None:
             return None
@@ -993,6 +1224,13 @@ class HikvisionIsapiClient:
         return None
 
     def _find_volume_node(self, root: ET.Element) -> Optional[ET.Element]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         for name in ("audioVolume", "volume"):
             node = _find_first_by_local_name(root, name)
             if node is not None:
@@ -1007,6 +1245,13 @@ class HikvisionIsapiClient:
         config_path: str,
         changed: bool,
     ) -> SupplementLightStatus:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         enabled_node = self._find_first_by_local_names(config_root, ("enabled", "enable"))
         brightness_node = self._find_first_by_local_names(
             config_root,
@@ -1053,6 +1298,13 @@ class HikvisionIsapiClient:
         )
 
     def _find_first_by_local_names(self, root: ET.Element, local_names: tuple[str, ...]) -> Optional[ET.Element]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         for local_name in local_names:
             node = _find_first_by_local_name(root, local_name)
             if node is not None:
@@ -1060,6 +1312,13 @@ class HikvisionIsapiClient:
         return None
 
     def _set_first_existing_text(self, root: ET.Element, local_names: tuple[str, ...], value: str) -> ET.Element:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         for local_name in local_names:
             node = _find_first_by_local_name(root, local_name)
             if node is not None:
@@ -1068,23 +1327,51 @@ class HikvisionIsapiClient:
         return self._set_or_create_text(root, local_names[0], value)
 
     def _first_twoway_channel(self, root: ET.Element) -> Optional[ET.Element]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         for node in root.iter():
             if _local_name(node.tag) == "TwoWayAudioChannel":
                 return node
         return None
 
     def _node_supports_option(self, node: Optional[ET.Element], expected_option: str) -> bool:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if node is None:
             return False
         return expected_option in self._node_options(node)
 
     def _node_options(self, node: Optional[ET.Element]) -> tuple[str, ...]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if node is None:
             return ()
         options = node.attrib.get("opt", "")
         return tuple(item.strip() for item in options.split(",") if item.strip())
 
     def _integer_options(self, node: Optional[ET.Element]) -> tuple[int, ...]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         values: list[int] = []
         for option in self._node_options(node):
             parsed = self._safe_int(option)
@@ -1093,6 +1380,13 @@ class HikvisionIsapiClient:
         return tuple(values)
 
     def _set_or_create_text(self, root: ET.Element, local_name: str, value: str) -> ET.Element:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         node = _find_first_by_local_name(root, local_name)
         if node is None:
             node = ET.SubElement(root, _child_tag_like(root, local_name))
@@ -1100,6 +1394,13 @@ class HikvisionIsapiClient:
         return node
 
     def _set_existing_text(self, root: ET.Element, local_name: str, value: str) -> Optional[ET.Element]:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         node = _find_first_by_local_name(root, local_name)
         if node is None:
             return None
@@ -1107,22 +1408,50 @@ class HikvisionIsapiClient:
         return node
 
     def _serialize_xml(self, root: ET.Element) -> str:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         namespace = _namespace_of(root)
         if namespace:
             ET.register_namespace("", namespace)
         return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
 
     def _max_from_node(self, node: Optional[ET.Element]) -> Optional[int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if node is None:
             return None
         return self._safe_int(node.attrib.get("max"))
 
     def _min_from_node(self, node: Optional[ET.Element]) -> Optional[int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if node is None:
             return None
         return self._safe_int(node.attrib.get("min"))
 
     def _safe_int(self, value: Optional[str]) -> Optional[int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if value is None:
             return None
         try:
@@ -1137,6 +1466,13 @@ class HikvisionIsapiClient:
         path: str,
         body: str | None = None,
     ) -> str:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         response_body, _headers = self._request(session, method, path, body)
         return response_body.decode("utf-8", errors="ignore")
 
@@ -1147,6 +1483,13 @@ class HikvisionIsapiClient:
         path: str,
         body: str | None = None,
     ) -> tuple[bytes, dict[str, str]]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         url = self._build_url(session, path)
         payload = body.encode("utf-8") if body is not None else None
         headers = {"Accept": "application/xml,text/xml,*/*"}
@@ -1172,10 +1515,24 @@ class HikvisionIsapiClient:
             ) from exc
 
     def _build_url(self, session: DeviceSession, path: str) -> str:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         normalized_path = path if path.startswith("/") else f"/{path}"
         return urllib.parse.urlunsplit((self.scheme, session.host, normalized_path, "", ""))
 
     def _request_error_message(self, error: requests.RequestException) -> str:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         response = getattr(error, "response", None)
         if response is None:
             return str(error)

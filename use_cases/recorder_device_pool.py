@@ -37,12 +37,26 @@ class RecorderDevicePoolError(RuntimeError):
 
 class RecorderDevicePool:
     def __init__(self, config_path: str | Path) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.config_path = Path(config_path)
         self.state_path = self.config_path.with_suffix(".state.json")
         self.lock_path = self.config_path.with_suffix(".lock")
 
     @contextmanager
     def acquire(self, wait_seconds: float = DEFAULT_RECORDER_POOL_WAIT_SECONDS) -> Iterator[RecorderPoolLease]:
+        """
+        作用：启动指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         request_id = f"{os.getpid()}-{uuid.uuid4().hex}"
         lease: RecorderPoolLease | None = None
         try:
@@ -61,6 +75,13 @@ class RecorderDevicePool:
         port: int = 8000,
         wait_seconds: float = DEFAULT_RECORDER_POOL_WAIT_SECONDS,
     ) -> Iterator[RecorderPoolLease]:
+        """
+        作用：启动指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         request_id = f"{os.getpid()}-{uuid.uuid4().hex}"
         lease: RecorderPoolLease | None = None
         try:
@@ -84,6 +105,13 @@ class RecorderDevicePool:
         target_host: str = "",
         target_port: int = 0,
     ) -> RecorderPoolLease:
+        """
+        作用：启动指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         if wait_seconds <= 0:
             raise ValueError("wait_seconds must be positive")
         deadline = time.time() + wait_seconds
@@ -108,6 +136,13 @@ class RecorderDevicePool:
         raise RecorderDevicePoolError(f"no recorder device available within {wait_seconds:.0f}s")
 
     def release(self, request_id: str) -> None:
+        """
+        作用：停止指定的 SDK 会话、资源或业务流程。
+        执行步骤：
+        1. 校验 SDK 或目标资源当前状态。
+        2. 调用对应底层接口执行动作。
+        3. 检查返回值并更新资源状态。
+        """
         with self._file_lock():
             state = self._load_state()
             state["active"] = [
@@ -123,6 +158,13 @@ class RecorderDevicePool:
         request_id: str,
         target_device_id: str = "",
     ) -> RecorderPoolLease | None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         active = state["active"]
         for device in devices:
             if target_device_id and device.device_id != target_device_id:
@@ -150,6 +192,13 @@ class RecorderDevicePool:
         return None
 
     def _ensure_wait_request(self, state: dict, request_id: str, target_device_id: str = "") -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if any(item.get("request_id") == request_id for item in state["queue"]):
             return
         state["queue"].append(
@@ -162,6 +211,13 @@ class RecorderDevicePool:
         )
 
     def _remove_wait_request(self, request_id: str) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         with self._file_lock():
             state = self._load_state()
             state["queue"] = [
@@ -171,6 +227,13 @@ class RecorderDevicePool:
             self._save_state(state)
 
     def _cleanup_state(self, state: dict) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         state["queue"] = [
             item for item in state.get("queue", [])
             if self._pid_alive(item.get("pid"))
@@ -181,6 +244,13 @@ class RecorderDevicePool:
         ]
 
     def _load_devices(self) -> list[RecorderPoolDevice]:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         if not self.config_path.exists():
             raise FileNotFoundError(f"recorder device pool config not found: {self.config_path}")
         with self.config_path.open("r", encoding="utf-8") as file:
@@ -225,6 +295,13 @@ class RecorderDevicePool:
         target_host: str,
         target_port: int,
     ) -> str:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         if not target_host:
             return ""
         normalized_host = target_host.strip().lower()
@@ -237,6 +314,13 @@ class RecorderDevicePool:
         )
 
     def _load_state(self) -> dict:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         if not self.state_path.exists():
             return {"queue": [], "active": []}
         with self.state_path.open("r", encoding="utf-8") as file:
@@ -248,12 +332,26 @@ class RecorderDevicePool:
         return {"queue": queue, "active": active}
 
     def _save_state(self, state: dict) -> None:
+        """
+        作用：检查当前状态，并将配置调整为目标值。
+        执行步骤：
+        1. 读取当前状态并校验能力范围。
+        2. 按目标值修改配置或运行状态。
+        3. 写回配置并返回刷新后的结果。
+        """
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         with self.state_path.open("w", encoding="utf-8") as file:
             json.dump(state, file, ensure_ascii=False, indent=2)
 
     @contextmanager
     def _file_lock(self) -> Iterator[None]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         while True:
             try:
@@ -280,6 +378,13 @@ class RecorderDevicePool:
                 pass
 
     def _lock_stale(self) -> bool:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         try:
             age = time.time() - self.lock_path.stat().st_mtime
         except FileNotFoundError:
@@ -288,6 +393,13 @@ class RecorderDevicePool:
 
     @staticmethod
     def _pid_alive(pid: object) -> bool:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         try:
             value = int(pid)
         except (TypeError, ValueError):

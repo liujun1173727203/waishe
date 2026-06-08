@@ -79,11 +79,25 @@ class SupplementLightUseCases:
         *,
         ffmpeg_path: str = "ffmpeg",
     ) -> None:
+        """
+        作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         self.sdk = sdk
         self.isapi = isapi
         self.ffmpeg_path = ffmpeg_path
 
     def _log_step(self, message: str) -> None:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         print(f"[补光灯测试] {message}", flush=True)
 
     def run_supplement_light_test(
@@ -97,6 +111,13 @@ class SupplementLightUseCases:
         level_threshold: float = 5.0,
         stream_type: int = STREAM_TYPE_MAIN,
     ) -> SupplementLightTestResult:
+        """
+        作用：编排并执行完整业务或测试用例，生成执行结果。
+        执行步骤：
+        1. 解析输入参数并准备依赖对象。
+        2. 按业务流程顺序执行核心步骤。
+        3. 输出日志、执行结果或退出码。
+        """
         if settle_seconds < 0:
             raise ValueError("settle_seconds 必须大于等于 0")
         if on_threshold <= 0 or level_threshold <= 0:
@@ -317,6 +338,13 @@ class SupplementLightUseCases:
         modes: tuple[str, ...],
         threshold: float,
     ) -> tuple[SupplementLightModeResult, ...]:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         results: list[SupplementLightModeResult] = []
         for mode in modes:
             minimum, middle, maximum = self._brightness_points_for_mode(status, mode)
@@ -351,6 +379,13 @@ class SupplementLightUseCases:
         status: MixedSupplementLightStatus,
         mode: str,
     ) -> tuple[int, int, int]:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         if mode == "colorVuWhiteLight":
             minimum, maximum = status.white_brightness_min, status.white_brightness_max
         else:
@@ -364,10 +399,24 @@ class SupplementLightUseCases:
         file_path: Path,
         stream_type: int,
     ) -> CapturePictureResult:
+        """
+        作用：执行抓图流程，保存图片并返回抓图结果。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         file_path.parent.mkdir(parents=True, exist_ok=True)
         return self.sdk.capture_picture(session, file_path, channel=channel, stream_type=stream_type)
 
     def _image_brightness(self, image_path: Path) -> float:
+        """
+        作用：分析输入数据，计算特征、分数或判定结果。
+        执行步骤：
+        1. 读取待分析的输入数据。
+        2. 计算统计量、特征或匹配分数。
+        3. 返回分析结论供用例判定。
+        """
         command = [
             self._resolve_ffmpeg(),
             "-v",
@@ -394,6 +443,13 @@ class SupplementLightUseCases:
         return sum(result.stdout) / len(result.stdout)
 
     def _resolve_ffmpeg(self) -> str:
+        """
+        作用：读取配置、设备或运行状态，并转换为结构化结果。
+        执行步骤：
+        1. 读取输入参数、配置或设备响应。
+        2. 解析并校验目标字段。
+        3. 返回解析后的结构化结果。
+        """
         configured = Path(self.ffmpeg_path)
         if configured.is_file():
             return str(configured.resolve())
@@ -407,5 +463,12 @@ class SupplementLightUseCases:
         raise HikvisionSDKError(f"未找到 ffmpeg: {self.ffmpeg_path}", api_name="ffmpeg")
 
     def _default_output_dir(self, host: str) -> Path:
+        """
+        作用：作为内部辅助方法，完成本方法对应的数据处理。
+        执行步骤：
+        1. 接收并校验输入参数。
+        2. 执行方法职责对应的核心处理。
+        3. 返回处理结果，失败时抛出异常。
+        """
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         return Path.cwd() / "recordings" / "supplement_light_tests" / host_dir

@@ -9,12 +9,26 @@ from hikvision_voice import HikvisionSDKError, HikvisionVoiceSDK, STREAM_TYPE_MA
 
 
 def _default_output_path(host: str, channel: int) -> Path:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return Path.cwd() / "recordings" / "captures" / host_dir / f"capture_ch{channel}_{timestamp}.jpg"
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(description="Capture picture with JPEG-first fallback-to-stream strategy")
     parser.add_argument("--host", default="10.18.117.22", help="device ip or hostname")
     parser.add_argument("--port", type=int, default=8000, help="sdk port")

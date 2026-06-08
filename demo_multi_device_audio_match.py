@@ -44,6 +44,13 @@ class DeviceMatchSummary:
 
 
 def main() -> int:
+    """
+    作用：作为命令行入口，解析参数并编排完整执行流程。
+    执行步骤：
+    1. 解析输入参数并准备依赖对象。
+    2. 按业务流程顺序执行核心步骤。
+    3. 输出日志、执行结果或退出码。
+    """
     parser = argparse.ArgumentParser(
         description=(
             "Simulate multiple devices playing audio at the same time, mix them as device A recording, "
@@ -167,6 +174,13 @@ def _match_all_devices(
     simulated_audios: list[SimulatedDeviceAudio],
     threshold: float,
 ) -> list[DeviceMatchSummary]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     summaries: list[DeviceMatchSummary] = []
     for audio in simulated_audios:
         result = analyzer.detect_reference_audio_in_wav(
@@ -188,6 +202,13 @@ def _match_all_devices(
 
 
 def _pcm_bytes_to_samples(pcm_bytes: bytes) -> list[int]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     return [
         int.from_bytes(pcm_bytes[offset:offset + SAMPLE_WIDTH_BYTES], byteorder="little", signed=True)
         for offset in range(0, len(pcm_bytes), SAMPLE_WIDTH_BYTES)
@@ -195,6 +216,13 @@ def _pcm_bytes_to_samples(pcm_bytes: bytes) -> list[int]:
 
 
 def _mix_samples(tracks: list[list[int]]) -> list[int]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     if not tracks:
         return []
     max_len = max(len(track) for track in tracks)
@@ -206,6 +234,13 @@ def _mix_samples(tracks: list[list[int]]) -> list[int]:
 
 
 def _add_noise(samples: list[int], amplitude_ratio: float) -> list[int]:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     random_generator = random.Random(20260604)
     max_noise = int(32767 * amplitude_ratio)
     return [
@@ -215,6 +250,13 @@ def _add_noise(samples: list[int], amplitude_ratio: float) -> list[int]:
 
 
 def _write_wav(path: Path, samples: list[int], sample_rate: int) -> None:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     pcm_bytes = b"".join(int(sample).to_bytes(SAMPLE_WIDTH_BYTES, byteorder="little", signed=True) for sample in samples)
     with wave.open(str(path), "wb") as wav_file:
@@ -225,6 +267,13 @@ def _write_wav(path: Path, samples: list[int], sample_rate: int) -> None:
 
 
 def _filename_token(value: str) -> str:
+    """
+    作用：作为内部辅助方法，完成本方法对应的数据处理。
+    执行步骤：
+    1. 接收并校验输入参数。
+    2. 执行方法职责对应的核心处理。
+    3. 返回处理结果，失败时抛出异常。
+    """
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in value).strip("_") or "device"
 
 
