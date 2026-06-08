@@ -67,6 +67,23 @@ class AudioInputCapabilityStatus:
 
 
 @dataclass(frozen=True)
+class ImageChannelCapabilityStatus:
+    channel_ids: tuple[int, ...]
+    source: str
+    request_path: str
+
+
+@dataclass(frozen=True)
+class IrcutFilterStatus:
+    supported: bool
+    changed: bool
+    capability_path: str
+    config_path: str
+    filter_type: str
+    filter_type_options: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SupplementLightStatus:
     supported: bool
     changed: bool
@@ -77,6 +94,48 @@ class SupplementLightStatus:
     brightness_min: int
     brightness_max: int
     mode: str
+
+
+@dataclass(frozen=True)
+class IrLightCapabilityStatus:
+    supported: bool
+    capability_path: str
+    mode_options: tuple[str, ...]
+    brightness_min: int
+    brightness_max: int
+
+
+@dataclass(frozen=True)
+class IrLightStatus:
+    supported: bool
+    changed: bool
+    capability_path: str
+    config_path: str
+    mode: str
+    mode_options: tuple[str, ...]
+    brightness_limit: int
+    brightness_min: int
+    brightness_max: int
+
+
+@dataclass(frozen=True)
+class MixedSupplementLightStatus:
+    supported: bool
+    changed: bool
+    capability_path: str
+    config_path: str
+    mode: str
+    mode_options: tuple[str, ...]
+    regulation_mode: str
+    regulation_mode_options: tuple[str, ...]
+    high_ir_brightness: int
+    low_ir_brightness: int
+    ir_brightness_min: int
+    ir_brightness_max: int
+    high_white_brightness: int
+    low_white_brightness: int
+    white_brightness_min: int
+    white_brightness_max: int
 
 
 @dataclass(frozen=True)
@@ -123,6 +182,48 @@ class HikvisionIsapiClient:
 
     def track_stream_id(self, channel: int, stream_type: int) -> int:
         return channel * 100 + self.stream_type_to_track_suffix(stream_type)
+
+    def get_supported_image_channel_ids(self, session: DeviceSession) -> ImageChannelCapabilityStatus:
+        capability_path = "/ISAPI/System/capabilities?type=all"
+        try:
+            capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
+            support_node = _find_first_by_local_name(capability_root, "supportImageChannel")
+            channel_ids = self._integer_options(support_node)
+            if channel_ids:
+                return ImageChannelCapabilityStatus(
+                    channel_ids=channel_ids,
+                    source="supportImageChannel",
+                    request_path=capability_path,
+                )
+        except (ET.ParseError, HikvisionSDKError):
+            pass
+
+        streaming_path = "/ISAPI/Streaming/channels"
+        streaming_root = ET.fromstring(self._request_text(session, "GET", streaming_path))
+        channel_ids: list[int] = []
+        for node in streaming_root.iter():
+            if _local_name(node.tag) != "StreamingChannel":
+                continue
+            enabled_node = _find_first_by_local_name(node, "enabled")
+            if enabled_node is not None and (enabled_node.text or "").strip().lower() not in {"true", "1"}:
+                continue
+            id_node = _find_first_by_local_name(node, "id")
+            streaming_channel_id = self._safe_int(id_node.text if id_node is not None else None)
+            if streaming_channel_id is None:
+                continue
+            # Streaming IDs use <physical-channel><stream-suffix>, for example
+            # 101/102 are the main/sub streams of image channel 1.
+            image_channel_id = streaming_channel_id // 100 if streaming_channel_id >= 100 else streaming_channel_id
+            if image_channel_id not in channel_ids:
+                channel_ids.append(image_channel_id)
+
+        if not channel_ids:
+            channel_ids.append(session.default_preview_channel)
+        return ImageChannelCapabilityStatus(
+            channel_ids=tuple(channel_ids),
+            source="StreamingChannel/id映射图像通道",
+            request_path=streaming_path,
+        )
 
     def get_streaming_channel_capabilities(
         self,
@@ -435,6 +536,314 @@ class HikvisionIsapiClient:
             output_status=self.set_audio_output_volume_to_max(session, output_channel),
         )
 
+    def get_mixed_supplement_light_status(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> MixedSupplementLightStatus:
+        capability_path = f"/ISAPI/Image/channels/{channel}/capabilities"
+        config_path = f"/ISAPI/Image/channels/{channel}"
+        capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
+        config_root = ET.fromstring(self._request_text(session, "GET", config_path))
+        capability_node = _find_first_by_local_name(capability_root, "SupplementLight")
+        config_node = _find_first_by_local_name(config_root, "SupplementLight")
+        if capability_node is None or config_node is None:
+            return MixedSupplementLightStatus(
+                False, False, capability_path, config_path, "", (), "", (), 0, 0, 0, 0, 0, 0, 0, 0
+            )
+
+        capability_mode = _find_first_by_local_name(capability_node, "supplementLightMode")
+        capability_regulation = _find_first_by_local_name(capability_node, "mixedLightBrightnessRegulatMode")
+        capability_ir = _find_first_by_local_name(capability_node, "highIrLightBrightness")
+        capability_white = _find_first_by_local_name(capability_node, "highWhiteLightBrightness")
+        mode_options = self._node_options(capability_mode)
+        regulation_options = self._node_options(capability_regulation)
+
+        def config_int(name: str) -> int:
+            node = _find_first_by_local_name(config_node, name)
+            return self._safe_int(node.text if node is not None else None) or 0
+
+        mode_node = _find_first_by_local_name(config_node, "supplementLightMode")
+        regulation_node = _find_first_by_local_name(config_node, "mixedLightBrightnessRegulatMode")
+        return MixedSupplementLightStatus(
+            supported=bool(mode_options) or mode_node is not None,
+            changed=False,
+            capability_path=capability_path,
+            config_path=config_path,
+            mode=(mode_node.text or "").strip() if mode_node is not None and mode_node.text else "",
+            mode_options=mode_options,
+            regulation_mode=(
+                (regulation_node.text or "").strip()
+                if regulation_node is not None and regulation_node.text
+                else ""
+            ),
+            regulation_mode_options=regulation_options,
+            high_ir_brightness=config_int("highIrLightBrightness"),
+            low_ir_brightness=config_int("lowIrLightBrightness"),
+            ir_brightness_min=self._min_from_node(capability_ir) or 0,
+            ir_brightness_max=self._max_from_node(capability_ir) or 100,
+            high_white_brightness=config_int("highWhiteLightBrightness"),
+            low_white_brightness=config_int("lowWhiteLightBrightness"),
+            white_brightness_min=self._min_from_node(capability_white) or 0,
+            white_brightness_max=self._max_from_node(capability_white) or 100,
+        )
+
+    def get_ircut_filter_status(
+        self,
+        session: DeviceSession,
+        channel: int,
+    ) -> IrcutFilterStatus:
+        channel_capability_path = f"/ISAPI/Image/channels/{channel}/capabilities"
+        common_capability_path = "/ISAPI/Image/channels/capabilities"
+        config_path = f"/ISAPI/Image/channels/{channel}"
+        capability_path, capability_root = self._get_first_xml(
+            session,
+            [channel_capability_path, common_capability_path],
+        )
+        if capability_path is None or capability_root is None:
+            raise HikvisionSDKError(
+                "未找到图像通道日夜切换能力",
+                api_name=channel_capability_path,
+            )
+        config_root = ET.fromstring(self._request_text(session, "GET", config_path))
+        capability_ircut = _find_first_by_local_name(capability_root, "IrcutFilter")
+        if capability_ircut is None and capability_path != common_capability_path:
+            capability_path, capability_root = self._get_first_xml(session, [common_capability_path])
+            capability_ircut = (
+                _find_first_by_local_name(capability_root, "IrcutFilter")
+                if capability_root is not None
+                else None
+            )
+        config_ircut = _find_first_by_local_name(config_root, "IrcutFilter")
+        capability_type = (
+            _find_first_by_local_name(capability_ircut, "IrcutFilterType")
+            if capability_ircut is not None
+            else None
+        )
+        config_type = (
+            _find_first_by_local_name(config_ircut, "IrcutFilterType")
+            if config_ircut is not None
+            else None
+        )
+        options = self._node_options(capability_type)
+        filter_type = (config_type.text or "").strip() if config_type is not None and config_type.text else ""
+        return IrcutFilterStatus(
+            supported=config_type is not None and bool(options),
+            changed=False,
+            capability_path=capability_path or channel_capability_path,
+            config_path=config_path,
+            filter_type=filter_type,
+            filter_type_options=options,
+        )
+
+    def ensure_ircut_filter_type(
+        self,
+        session: DeviceSession,
+        channel: int,
+        filter_type: str,
+    ) -> IrcutFilterStatus:
+        status = self.get_ircut_filter_status(session, channel)
+        if not status.supported:
+            return status
+        if filter_type not in status.filter_type_options:
+            raise HikvisionSDKError(
+                f"设备不支持日夜切换类型: {filter_type}",
+                api_name=status.capability_path,
+            )
+        if status.filter_type == filter_type:
+            return status
+
+        config_root = ET.fromstring(self._request_text(session, "GET", status.config_path))
+        config_ircut = _find_first_by_local_name(config_root, "IrcutFilter")
+        if config_ircut is None:
+            raise HikvisionSDKError("未找到 IrcutFilter 配置", api_name=status.config_path)
+        self._set_or_create_text(config_ircut, "IrcutFilterType", filter_type)
+        self._request_text(session, "PUT", status.config_path, body=self._serialize_xml(config_root))
+        refreshed = self.get_ircut_filter_status(session, channel)
+        return IrcutFilterStatus(
+            supported=refreshed.supported,
+            changed=True,
+            capability_path=refreshed.capability_path,
+            config_path=refreshed.config_path,
+            filter_type=refreshed.filter_type,
+            filter_type_options=refreshed.filter_type_options,
+        )
+
+    def ensure_mixed_supplement_light_ready(
+        self,
+        session: DeviceSession,
+        channel: int,
+        *,
+        mode: str,
+        brightness: Optional[int] = None,
+        prefer_manual: bool = True,
+    ) -> MixedSupplementLightStatus:
+        status = self.get_mixed_supplement_light_status(session, channel=channel)
+        if not status.supported:
+            return status
+        if status.mode_options and mode not in status.mode_options:
+            raise HikvisionSDKError(f"不支持补光灯模式: {mode}", api_name=status.capability_path)
+
+        config_root = ET.fromstring(self._request_text(session, "GET", status.config_path))
+        config_node = _find_first_by_local_name(config_root, "SupplementLight")
+        if config_node is None:
+            raise HikvisionSDKError("未找到 SupplementLight 配置", api_name=status.config_path)
+
+        self._set_or_create_text(config_node, "supplementLightMode", mode)
+        if prefer_manual and "manual" in status.regulation_mode_options:
+            self._set_or_create_text(config_node, "mixedLightBrightnessRegulatMode", "manual")
+        if brightness is not None:
+            if mode == "colorVuWhiteLight":
+                value = max(status.white_brightness_min, min(status.white_brightness_max, int(brightness)))
+                self._set_or_create_text(config_node, "highWhiteLightBrightness", str(value))
+                self._set_or_create_text(config_node, "lowWhiteLightBrightness", str(value))
+            elif mode == "irLight":
+                value = max(status.ir_brightness_min, min(status.ir_brightness_max, int(brightness)))
+                self._set_or_create_text(config_node, "highIrLightBrightness", str(value))
+                self._set_or_create_text(config_node, "lowIrLightBrightness", str(value))
+
+        self._request_text(session, "PUT", status.config_path, body=self._serialize_xml(config_root))
+        refreshed = self.get_mixed_supplement_light_status(session, channel=channel)
+        return MixedSupplementLightStatus(**{**refreshed.__dict__, "changed": True})
+
+    def restore_mixed_supplement_light_status(
+        self,
+        session: DeviceSession,
+        channel: int,
+        status: MixedSupplementLightStatus,
+    ) -> MixedSupplementLightStatus:
+        config_root = ET.fromstring(self._request_text(session, "GET", status.config_path))
+        config_node = _find_first_by_local_name(config_root, "SupplementLight")
+        if config_node is None:
+            raise HikvisionSDKError("未找到 SupplementLight 配置", api_name=status.config_path)
+        values = {
+            "supplementLightMode": status.mode,
+            "mixedLightBrightnessRegulatMode": status.regulation_mode,
+            "highIrLightBrightness": status.high_ir_brightness,
+            "lowIrLightBrightness": status.low_ir_brightness,
+            "highWhiteLightBrightness": status.high_white_brightness,
+            "lowWhiteLightBrightness": status.low_white_brightness,
+        }
+        for name, value in values.items():
+            if value != "":
+                self._set_or_create_text(config_node, name, str(value))
+        self._request_text(session, "PUT", status.config_path, body=self._serialize_xml(config_root))
+        return self.get_mixed_supplement_light_status(session, channel=channel)
+
+    def get_ir_light_capability_status(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> IrLightCapabilityStatus:
+        capability_path = "/ISAPI/Image/channels/capabilities"
+        try:
+            capability_root = ET.fromstring(self._request_text(session, "GET", capability_path))
+        except HikvisionSDKError:
+            return IrLightCapabilityStatus(False, capability_path, (), 0, 0)
+
+        ir_light_node = _find_first_by_local_name(capability_root, "IrLight")
+        if ir_light_node is None:
+            return IrLightCapabilityStatus(False, capability_path, (), 0, 0)
+
+        mode_node = _find_first_by_local_name(ir_light_node, "mode")
+        brightness_limit_node = _find_first_by_local_name(ir_light_node, "brightnessLimit")
+        mode_options = self._node_options(mode_node)
+        brightness_min = self._min_from_node(brightness_limit_node) or 0
+        brightness_max = self._max_from_node(brightness_limit_node) or 100
+
+        return IrLightCapabilityStatus(
+            supported=brightness_limit_node is not None,
+            capability_path=capability_path,
+            mode_options=mode_options,
+            brightness_min=brightness_min,
+            brightness_max=brightness_max,
+        )
+
+    def get_ir_light_status(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+    ) -> IrLightStatus:
+        capability = self.get_ir_light_capability_status(session, channel=channel)
+        config_path = f"/ISAPI/Image/channels/{channel}"
+        config_root = ET.fromstring(self._request_text(session, "GET", config_path))
+        ir_light_node = _find_first_by_local_name(config_root, "IrLight")
+        if ir_light_node is None:
+            return IrLightStatus(
+                supported=False,
+                changed=False,
+                capability_path=capability.capability_path,
+                config_path=config_path,
+                mode="",
+                mode_options=capability.mode_options,
+                brightness_limit=0,
+                brightness_min=capability.brightness_min,
+                brightness_max=capability.brightness_max,
+            )
+
+        mode_node = _find_first_by_local_name(ir_light_node, "mode")
+        brightness_limit_node = _find_first_by_local_name(ir_light_node, "brightnessLimit")
+        mode = (mode_node.text or "").strip() if mode_node is not None and mode_node.text else ""
+        brightness_limit = self._safe_int(brightness_limit_node.text if brightness_limit_node is not None else None) or 0
+        mode_options = capability.mode_options or ((mode,) if mode else ())
+        brightness_min = capability.brightness_min
+        brightness_max = capability.brightness_max or self._max_from_node(brightness_limit_node) or 100
+
+        return IrLightStatus(
+            supported=capability.supported and brightness_limit_node is not None,
+            changed=False,
+            capability_path=capability.capability_path,
+            config_path=config_path,
+            mode=mode,
+            mode_options=mode_options,
+            brightness_limit=brightness_limit,
+            brightness_min=brightness_min,
+            brightness_max=brightness_max,
+        )
+
+    def ensure_ir_light_ready(
+        self,
+        session: DeviceSession,
+        channel: int = 1,
+        *,
+        mode: str,
+        brightness_limit: int,
+    ) -> IrLightStatus:
+        status = self.get_ir_light_status(session, channel=channel)
+        if not status.supported:
+            return status
+        if status.mode_options and mode not in status.mode_options:
+            raise HikvisionSDKError(
+                f"IrLight mode is not supported: {mode}",
+                api_name=status.capability_path,
+            )
+
+        clipped = max(status.brightness_min, min(status.brightness_max, int(brightness_limit)))
+        if status.mode == mode and status.brightness_limit == clipped:
+            return status
+
+        config_root = ET.fromstring(self._request_text(session, "GET", status.config_path))
+        ir_light_node = _find_first_by_local_name(config_root, "IrLight")
+        if ir_light_node is None:
+            raise HikvisionSDKError("IrLight config not found", api_name=status.config_path)
+
+        self._set_or_create_text(ir_light_node, "mode", mode)
+        self._set_or_create_text(ir_light_node, "brightnessLimit", str(clipped))
+        self._request_text(session, "PUT", status.config_path, body=self._serialize_xml(config_root))
+
+        refreshed = self.get_ir_light_status(session, channel=channel)
+        return IrLightStatus(
+            supported=refreshed.supported,
+            changed=True,
+            capability_path=refreshed.capability_path,
+            config_path=refreshed.config_path,
+            mode=refreshed.mode,
+            mode_options=refreshed.mode_options,
+            brightness_limit=refreshed.brightness_limit,
+            brightness_min=refreshed.brightness_min,
+            brightness_max=refreshed.brightness_max,
+        )
+
     def get_supplement_light_status(
         self,
         session: DeviceSession,
@@ -674,6 +1083,14 @@ class HikvisionIsapiClient:
             return ()
         options = node.attrib.get("opt", "")
         return tuple(item.strip() for item in options.split(",") if item.strip())
+
+    def _integer_options(self, node: Optional[ET.Element]) -> tuple[int, ...]:
+        values: list[int] = []
+        for option in self._node_options(node):
+            parsed = self._safe_int(option)
+            if parsed is not None and parsed not in values:
+                values.append(parsed)
+        return tuple(values)
 
     def _set_or_create_text(self, root: ET.Element, local_name: str, value: str) -> ET.Element:
         node = _find_first_by_local_name(root, local_name)

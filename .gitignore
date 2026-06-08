@@ -1,3 +1,5 @@
 SdkLog/
 __pycache__/
 recordings/
+configs/*.state.json
+configs/*.lock

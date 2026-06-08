@@ -16,8 +16,7 @@ def main() -> int:
     parser.add_argument("--voice-channel", type=int, default=0, help="voice talk channel, 0 means auto")
     parser.add_argument("--duration", type=int, default=4, help="audio duration in seconds")
     parser.add_argument("--seed", type=int, default=None, help="optional random seed")
-    parser.add_argument("--digit-sequence", default="", help="optional fixed speaker validation digit sequence")
-    parser.add_argument("--test-tone-id", default="", help="optional id for this device's speaker validation tone")
+    parser.add_argument("--test-tone-id", default="", help="optional id for this device's continuous-frequency validation tone")
     parser.add_argument("--enable-log", action="store_true", help="enable sdk log output")
     args = parser.parse_args()
 
@@ -34,7 +33,6 @@ def main() -> int:
             duration_seconds=args.duration,
             voice_channel=args.voice_channel or session.default_voice_channel,
             seed=args.seed,
-            digit_sequence=args.digit_sequence or None,
             fingerprint_source=args.test_tone_id or args.host,
         )
         print(
@@ -43,7 +41,7 @@ def main() -> int:
             f"duration={result.duration_seconds}s",
             f"encode_type={result.encode_type}",
             f"voice_channel={result.voice_channel}",
-            f"digit_sequence={result.digit_sequence}",
+            "frequency_profile=" + ",".join(f"{frequency:.1f}" for frequency in result.frequency_profile),
             f"bytes_sent={result.bytes_sent}",
             f"frames_sent={result.frames_sent}",
         )

@@ -3,38 +3,70 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from hikvision_isapi import HikvisionIsapiClient, SupplementLightStatus
+from hikvision_isapi import HikvisionIsapiClient, IrcutFilterStatus, MixedSupplementLightStatus
 from hikvision_voice import CapturePictureResult, DeviceSession, HikvisionSDKError, HikvisionVoiceSDK, STREAM_TYPE_MAIN
 
 
-SUPPLEMENT_LIGHT_LEVELS = (0, 50, 100)
+TEST_LIGHT_MODES = ("colorVuWhiteLight", "irLight")
 
 
 @dataclass(frozen=True)
-class SupplementLightLevelResult:
-    level: int
-    status: SupplementLightStatus
+class SupplementLightCaptureResult:
+    mode: str
+    brightness_limit: int
+    status: MixedSupplementLightStatus
     capture_result: CapturePictureResult
-    brightness: float
+    image_brightness: float
+
+
+@dataclass(frozen=True)
+class SupplementLightModeResult:
+    mode: str
+    min_limit: int
+    middle_limit: int
+    max_limit: int
+    min_image_brightness: float
+    middle_image_brightness: float
+    max_image_brightness: float
+    min_to_middle_delta: float
+    middle_to_max_delta: float
+    passed: bool
+
+
+@dataclass(frozen=True)
+class SupplementLightFunctionResult:
+    mode: str
+    before_mode: str
+    before_brightness_limit: int
+    before_image_brightness: float
+    before_capture_result: CapturePictureResult
+    after_brightness_limit: int
+    after_image_brightness: float
+    after_capture_result: CapturePictureResult
+    brightness_delta: float
+    threshold: float
+    passed: bool
 
 
 @dataclass(frozen=True)
 class SupplementLightTestResult:
-    baseline_status: SupplementLightStatus
-    baseline_capture_result: CapturePictureResult
-    baseline_brightness: float
-    level_results: tuple[SupplementLightLevelResult, ...]
-    light_on_pass: bool
-    level_pass: bool
+    channel: int
+    original_status: MixedSupplementLightStatus
+    original_ircut_status: IrcutFilterStatus
+    night_ircut_status: IrcutFilterStatus
+    tested_modes: tuple[str, ...]
+    function_results: tuple[SupplementLightFunctionResult, ...]
+    capture_results: tuple[SupplementLightCaptureResult, ...]
+    mode_results: tuple[SupplementLightModeResult, ...]
+    function_pass: bool
+    effect_pass: bool
     passed: bool
-    on_delta: float
-    level_0_to_50_delta: float
-    level_50_to_100_delta: float
     on_threshold: float
     level_threshold: float
 
@@ -52,12 +84,13 @@ class SupplementLightUseCases:
         self.ffmpeg_path = ffmpeg_path
 
     def _log_step(self, message: str) -> None:
-        print(f"[supplement-light-test] {message}", flush=True)
+        print(f"[补光灯测试] {message}", flush=True)
 
     def run_supplement_light_test(
         self,
         session: DeviceSession,
         channel: Optional[int] = None,
+        capture_channel: Optional[int] = None,
         output_dir: str | Path | None = None,
         settle_seconds: float = 2.0,
         on_threshold: float = 10.0,
@@ -65,119 +98,264 @@ class SupplementLightUseCases:
         stream_type: int = STREAM_TYPE_MAIN,
     ) -> SupplementLightTestResult:
         if settle_seconds < 0:
-            raise ValueError("settle_seconds must be non-negative")
-        if on_threshold <= 0:
-            raise ValueError("on_threshold must be positive")
-        if level_threshold <= 0:
-            raise ValueError("level_threshold must be positive")
+            raise ValueError("settle_seconds 必须大于等于 0")
+        if on_threshold <= 0 or level_threshold <= 0:
+            raise ValueError("亮度判定阈值必须大于 0")
 
-        target_channel = channel or session.default_preview_channel
+        image_channel = channel or session.default_preview_channel
+        target_capture_channel = capture_channel or session.default_preview_channel
         base_dir = Path(output_dir) if output_dir is not None else self._default_output_dir(session.host)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        test_id = f"{session.host.replace('.', '_')}_{timestamp}"
-
-        self._log_step(f"start host={session.host} channel={target_channel}")
-        self._log_step(f"check image analysis dependency ffmpeg path={self.ffmpeg_path}")
-        ffmpeg = self._resolve_ffmpeg()
-        self._log_step(f"image analysis dependency ready ffmpeg={ffmpeg}")
-
-        status = self.isapi.get_supplement_light_status(session, channel=target_channel)
-        if not status.supported:
-            raise HikvisionSDKError(
-                "device does not support supplement light config",
-                api_name=status.config_path or "GET /ISAPI/Image/channels/<channel>/SupplementLight",
-            )
-        self._log_step(
-            "supplement light capability ready "
-            f"path={status.config_path} brightness_range={status.brightness_min}-{status.brightness_max} "
-            f"enabled={status.enabled} brightness={status.brightness} mode={status.mode or 'unknown'}"
+        test_id = (
+            f"{session.host.replace('.', '_')}_image_channel_{image_channel}"
+            f"_capture_channel_{target_capture_channel}_{timestamp}"
         )
 
-        self._log_step("set supplement light baseline off/level 0")
-        baseline_status = self.isapi.ensure_supplement_light_ready(
-            session=session,
-            channel=target_channel,
-            enabled=False,
-            brightness=0,
+        self._log_step(
+            f"开始执行 host={session.host} 图像配置通道={image_channel} 抓图通道={target_capture_channel}"
+        )
+        self._log_step(f"检查图像分析依赖 ffmpeg 路径={self.ffmpeg_path}")
+        self._log_step(f"图像分析依赖可用 ffmpeg={self._resolve_ffmpeg()}")
+
+        original_status = self.isapi.get_mixed_supplement_light_status(session, channel=image_channel)
+        if not original_status.supported:
+            raise HikvisionSDKError("设备通道不支持 SupplementLight", api_name=original_status.capability_path)
+
+        tested_modes = tuple(mode for mode in TEST_LIGHT_MODES if mode in original_status.mode_options)
+        if not tested_modes:
+            raise HikvisionSDKError(
+                "supplementLightMode 不支持 colorVuWhiteLight 或 irLight",
+                api_name=original_status.capability_path,
+            )
+        manual_supported = "manual" in original_status.regulation_mode_options
+        self._log_step(
+            "能力检查通过 "
+            f"能力接口={original_status.capability_path} 配置接口={original_status.config_path} "
+            f"supplementLightMode选项={','.join(original_status.mode_options)} "
+            f"待测试灯类型={','.join(tested_modes)} "
+            f"亮度调节模式选项={','.join(original_status.regulation_mode_options) or '未返回'} "
+            f"是否支持manual={manual_supported}"
+        )
+        if manual_supported:
+            self._log_step("mixedLightBrightnessRegulatMode 支持 manual，后续配置统一设置为 manual")
+
+        original_ircut_status = self.isapi.get_ircut_filter_status(session, image_channel)
+        if not original_ircut_status.supported or "night" not in original_ircut_status.filter_type_options:
+            raise HikvisionSDKError(
+                "设备图像通道不支持将 IrcutFilterType 切换为 night",
+                api_name=original_ircut_status.capability_path,
+            )
+        self._log_step(
+            "日夜切换能力检查通过 "
+            f"当前IrcutFilterType={original_ircut_status.filter_type} "
+            f"支持选项={','.join(original_ircut_status.filter_type_options)}"
+        )
+        night_ircut_status = self.isapi.ensure_ircut_filter_type(session, image_channel, "night")
+        self._log_step(
+            f"已将日夜模式切换为 night changed={night_ircut_status.changed} "
+            f"当前IrcutFilterType={night_ircut_status.filter_type}"
         )
         time.sleep(settle_seconds)
-        baseline_capture = self._capture(
-            session=session,
-            channel=target_channel,
-            file_path=base_dir / f"supplement_light_baseline_off_{test_id}.jpg",
-            stream_type=stream_type,
-        )
-        baseline_brightness = self._image_brightness(baseline_capture.file_path)
-        self._log_step(
-            f"baseline captured brightness={baseline_brightness:.2f} "
-            f"method={baseline_capture.method} path={baseline_capture.file_path}"
-        )
 
-        level_results: list[SupplementLightLevelResult] = []
-        for level in SUPPLEMENT_LIGHT_LEVELS:
-            self._log_step(f"set supplement light enabled level={level}")
-            level_status = self.isapi.ensure_supplement_light_ready(
-                session=session,
-                channel=target_channel,
-                enabled=True,
-                brightness=level,
-            )
-            time.sleep(settle_seconds)
-            capture_result = self._capture(
-                session=session,
-                channel=target_channel,
-                file_path=base_dir / f"supplement_light_level_{level}_{test_id}.jpg",
-                stream_type=stream_type,
-            )
-            brightness = self._image_brightness(capture_result.file_path)
-            self._log_step(
-                f"level analysis level={level} brightness={brightness:.2f} "
-                f"method={capture_result.method} fallback={capture_result.fallback_used} "
-                f"path={capture_result.file_path}"
-            )
-            level_results.append(
-                SupplementLightLevelResult(
-                    level=level,
-                    status=level_status,
-                    capture_result=capture_result,
-                    brightness=brightness,
+        capture_results: list[SupplementLightCaptureResult] = []
+        function_results: list[SupplementLightFunctionResult] = []
+        try:
+            for light_mode in tested_modes:
+                minimum, middle, maximum = self._brightness_points_for_mode(original_status, light_mode)
+                before_mode = "close" if "close" in original_status.mode_options else light_mode
+                before_brightness = minimum
+                self._log_step(
+                    f"开始功能有效性校验 灯类型={light_mode} "
+                    f"开启前模式={before_mode} 开启后模式={light_mode} 开启后亮度={maximum}"
                 )
+
+                before_status = self.isapi.ensure_mixed_supplement_light_ready(
+                    session,
+                    image_channel,
+                    mode=before_mode,
+                    brightness=before_brightness if before_mode == light_mode else None,
+                    prefer_manual=True,
+                )
+                time.sleep(settle_seconds)
+                before_capture = self._capture(
+                    session,
+                    target_capture_channel,
+                    base_dir / f"supplement_light_before_{light_mode}_{test_id}.jpg",
+                    stream_type,
+                )
+                before_image_brightness = self._image_brightness(before_capture.file_path)
+
+                after_status = self.isapi.ensure_mixed_supplement_light_ready(
+                    session,
+                    image_channel,
+                    mode=light_mode,
+                    brightness=maximum,
+                    prefer_manual=True,
+                )
+                time.sleep(settle_seconds)
+                after_capture = self._capture(
+                    session,
+                    target_capture_channel,
+                    base_dir / f"supplement_light_after_{light_mode}_{maximum}_{test_id}.jpg",
+                    stream_type,
+                )
+                after_image_brightness = self._image_brightness(after_capture.file_path)
+                delta = after_image_brightness - before_image_brightness
+                function_passed = delta >= on_threshold
+                function_results.append(
+                    SupplementLightFunctionResult(
+                        mode=light_mode,
+                        before_mode=before_mode,
+                        before_brightness_limit=before_brightness,
+                        before_image_brightness=before_image_brightness,
+                        before_capture_result=before_capture,
+                        after_brightness_limit=maximum,
+                        after_image_brightness=after_image_brightness,
+                        after_capture_result=after_capture,
+                        brightness_delta=delta,
+                        threshold=on_threshold,
+                        passed=function_passed,
+                    )
+                )
+                capture_results.extend(
+                    (
+                        SupplementLightCaptureResult(
+                            before_mode, before_brightness, before_status, before_capture, before_image_brightness
+                        ),
+                        SupplementLightCaptureResult(
+                            light_mode, maximum, after_status, after_capture, after_image_brightness
+                        ),
+                    )
+                )
+                self._log_step(
+                    f"功能有效性结论 灯类型={light_mode} 开启前亮度={before_image_brightness:.2f} "
+                    f"开启后亮度={after_image_brightness:.2f} 亮度差={delta:.2f} "
+                    f"阈值={on_threshold:.2f} 是否有效={function_passed}"
+                )
+
+                self._log_step(
+                    f"开始效果有效性校验 灯类型={light_mode} "
+                    f"亮度测试点={minimum},{middle},{maximum}"
+                )
+                for brightness in (minimum, middle, maximum):
+                    status = self.isapi.ensure_mixed_supplement_light_ready(
+                        session,
+                        image_channel,
+                        mode=light_mode,
+                        brightness=brightness,
+                        prefer_manual=True,
+                    )
+                    time.sleep(settle_seconds)
+                    capture = self._capture(
+                        session,
+                        target_capture_channel,
+                        base_dir / f"supplement_light_{light_mode}_{brightness}_{test_id}.jpg",
+                        stream_type,
+                    )
+                    image_brightness = self._image_brightness(capture.file_path)
+                    capture_results.append(
+                        SupplementLightCaptureResult(light_mode, brightness, status, capture, image_brightness)
+                    )
+                    self._log_step(
+                        f"强度抓图分析完成 灯类型={light_mode} brightness={brightness} "
+                        f"图像亮度={image_brightness:.2f} 抓图方式={capture.method} 路径={capture.file_path}"
+                    )
+        finally:
+            with suppress(Exception):
+                self.isapi.restore_mixed_supplement_light_status(session, image_channel, original_status)
+                self._log_step(f"已恢复测试前补光灯配置 图像通道={image_channel}")
+            if original_ircut_status.supported and original_ircut_status.filter_type:
+                with suppress(Exception):
+                    restored_ircut = self.isapi.ensure_ircut_filter_type(
+                        session,
+                        image_channel,
+                        original_ircut_status.filter_type,
+                    )
+                    self._log_step(
+                        f"已恢复测试前日夜模式 IrcutFilterType={restored_ircut.filter_type}"
+                    )
+
+        mode_results = self._analyze_modes(capture_results, original_status, tested_modes, level_threshold)
+        function_pass = len(function_results) == len(tested_modes) and all(result.passed for result in function_results)
+        effect_pass = len(mode_results) == len(tested_modes) and all(result.passed for result in mode_results)
+        passed = function_pass and effect_pass
+
+        for result in mode_results:
+            self._log_step(
+                f"效果有效性结论 灯类型={result.mode} "
+                f"最小={result.min_limit}:{result.min_image_brightness:.2f} "
+                f"中间={result.middle_limit}:{result.middle_image_brightness:.2f} "
+                f"最大={result.max_limit}:{result.max_image_brightness:.2f} "
+                f"最小到中间亮度差={result.min_to_middle_delta:.2f} "
+                f"中间到最大亮度差={result.middle_to_max_delta:.2f} 是否有效={result.passed}"
             )
-
-        brightness_by_level = {result.level: result.brightness for result in level_results}
-        on_delta = brightness_by_level[100] - baseline_brightness
-        level_0_to_50_delta = brightness_by_level[50] - brightness_by_level[0]
-        level_50_to_100_delta = brightness_by_level[100] - brightness_by_level[50]
-        light_on_pass = on_delta >= on_threshold
-        level_pass = level_0_to_50_delta >= level_threshold and level_50_to_100_delta >= level_threshold
-        passed = light_on_pass and level_pass
-
         self._log_step(
-            "final conclusion "
-            f"baseline={baseline_brightness:.2f} "
-            f"level0={brightness_by_level[0]:.2f} "
-            f"level50={brightness_by_level[50]:.2f} "
-            f"level100={brightness_by_level[100]:.2f} "
-            f"on_delta={on_delta:.2f} "
-            f"level_0_to_50_delta={level_0_to_50_delta:.2f} "
-            f"level_50_to_100_delta={level_50_to_100_delta:.2f} "
-            f"light_on_pass={light_on_pass} level_pass={level_pass} passed={passed}"
+            f"通道最终结论 图像通道={image_channel} 功能有效={function_pass} "
+            f"效果有效={effect_pass} 是否通过={passed}"
         )
 
         return SupplementLightTestResult(
-            baseline_status=baseline_status,
-            baseline_capture_result=baseline_capture,
-            baseline_brightness=baseline_brightness,
-            level_results=tuple(level_results),
-            light_on_pass=light_on_pass,
-            level_pass=level_pass,
+            channel=image_channel,
+            original_status=original_status,
+            original_ircut_status=original_ircut_status,
+            night_ircut_status=night_ircut_status,
+            tested_modes=tested_modes,
+            function_results=tuple(function_results),
+            capture_results=tuple(capture_results),
+            mode_results=mode_results,
+            function_pass=function_pass,
+            effect_pass=effect_pass,
             passed=passed,
-            on_delta=on_delta,
-            level_0_to_50_delta=level_0_to_50_delta,
-            level_50_to_100_delta=level_50_to_100_delta,
             on_threshold=on_threshold,
             level_threshold=level_threshold,
         )
+
+    def _analyze_modes(
+        self,
+        capture_results: list[SupplementLightCaptureResult],
+        status: MixedSupplementLightStatus,
+        modes: tuple[str, ...],
+        threshold: float,
+    ) -> tuple[SupplementLightModeResult, ...]:
+        results: list[SupplementLightModeResult] = []
+        for mode in modes:
+            minimum, middle, maximum = self._brightness_points_for_mode(status, mode)
+            by_brightness = {
+                item.brightness_limit: item.image_brightness for item in capture_results if item.mode == mode
+            }
+            if not all(point in by_brightness for point in (minimum, middle, maximum)):
+                continue
+            min_value = by_brightness[minimum]
+            middle_value = by_brightness[middle]
+            max_value = by_brightness[maximum]
+            first_delta = middle_value - min_value
+            second_delta = max_value - middle_value
+            results.append(
+                SupplementLightModeResult(
+                    mode=mode,
+                    min_limit=minimum,
+                    middle_limit=middle,
+                    max_limit=maximum,
+                    min_image_brightness=min_value,
+                    middle_image_brightness=middle_value,
+                    max_image_brightness=max_value,
+                    min_to_middle_delta=first_delta,
+                    middle_to_max_delta=second_delta,
+                    passed=first_delta >= threshold and second_delta >= threshold,
+                )
+            )
+        return tuple(results)
+
+    def _brightness_points_for_mode(
+        self,
+        status: MixedSupplementLightStatus,
+        mode: str,
+    ) -> tuple[int, int, int]:
+        if mode == "colorVuWhiteLight":
+            minimum, maximum = status.white_brightness_min, status.white_brightness_max
+        else:
+            minimum, maximum = status.ir_brightness_min, status.ir_brightness_max
+        return minimum, (minimum + maximum) // 2, maximum
 
     def _capture(
         self,
@@ -187,17 +365,11 @@ class SupplementLightUseCases:
         stream_type: int,
     ) -> CapturePictureResult:
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        return self.sdk.capture_picture(
-            session=session,
-            file_path=file_path,
-            channel=channel,
-            stream_type=stream_type,
-        )
+        return self.sdk.capture_picture(session, file_path, channel=channel, stream_type=stream_type)
 
     def _image_brightness(self, image_path: Path) -> float:
-        ffmpeg = self._resolve_ffmpeg()
         command = [
-            ffmpeg,
+            self._resolve_ffmpeg(),
             "-v",
             "error",
             "-i",
@@ -213,12 +385,12 @@ class SupplementLightUseCases:
         result = subprocess.run(command, capture_output=True)
         if result.returncode != 0:
             raise HikvisionSDKError(
-                "image brightness analysis failed",
+                "图像亮度分析失败",
                 api_name="ffmpeg",
                 error_message=result.stderr.decode("utf-8", errors="ignore").strip(),
             )
         if not result.stdout:
-            raise HikvisionSDKError("image brightness analysis returned empty data", api_name="ffmpeg")
+            raise HikvisionSDKError("图像亮度分析返回空数据", api_name="ffmpeg")
         return sum(result.stdout) / len(result.stdout)
 
     def _resolve_ffmpeg(self) -> str:
@@ -232,10 +404,7 @@ class SupplementLightUseCases:
         resolved = shutil.which(self.ffmpeg_path)
         if resolved is not None:
             return resolved
-        raise HikvisionSDKError(
-            f"ffmpeg not found: {self.ffmpeg_path}. Please install ffmpeg or pass a valid ffmpeg_path.",
-            api_name="ffmpeg",
-        )
+        raise HikvisionSDKError(f"未找到 ffmpeg: {self.ffmpeg_path}", api_name="ffmpeg")
 
     def _default_output_dir(self, host: str) -> Path:
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)

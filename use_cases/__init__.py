@@ -1,7 +1,10 @@
 from .pickup_test_cases import PickupTestResult, PickupTestUseCases, PlaybackDeviceConfig
+from .recorder_device_pool import RecorderDevicePool, RecorderDevicePoolError, RecorderPoolLease
 from .speaker_test_cases import RecorderDeviceConfig, SpeakerTestResult, SpeakerTestUseCases
 from .supplement_light_cases import (
-    SupplementLightLevelResult,
+    SupplementLightCaptureResult,
+    SupplementLightFunctionResult,
+    SupplementLightModeResult,
     SupplementLightTestResult,
     SupplementLightUseCases,
 )
@@ -14,9 +17,14 @@ __all__ = [
     "PreparedRandomAudio",
     "RandomAudioTalkResult",
     "RecorderDeviceConfig",
+    "RecorderDevicePool",
+    "RecorderDevicePoolError",
+    "RecorderPoolLease",
     "SpeakerTestResult",
     "SpeakerTestUseCases",
-    "SupplementLightLevelResult",
+    "SupplementLightCaptureResult",
+    "SupplementLightFunctionResult",
+    "SupplementLightModeResult",
     "SupplementLightTestResult",
     "SupplementLightUseCases",
     "VoiceTalkUseCases",

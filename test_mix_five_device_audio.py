@@ -23,13 +23,13 @@ DEFAULT_DEVICE_IDS = (
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate and mix five simulated continuous-frequency device audios")
+    parser = argparse.ArgumentParser(description="Generate and mix five simulated discrete-frequency device audios")
     parser.add_argument("--duration", type=int, default=4, help="audio duration in seconds")
     parser.add_argument("--amplitude-ratio", type=float, default=0.16, help="single-device amplitude before mixing")
     parser.add_argument("--sample-rate", type=int, default=WIDEBAND_SAMPLE_RATE, help="wav sample rate")
     parser.add_argument("--min-frequency", type=float, default=900.0, help="minimum frequency in Hz")
     parser.add_argument("--max-frequency", type=float, default=3200.0, help="maximum frequency in Hz")
-    parser.add_argument("--segment-count", type=int, default=8, help="continuous frequency control points")
+    parser.add_argument("--segment-count", type=int, default=8, help="discrete frequency segment count")
     parser.add_argument("--output-dir", default="", help="output directory, default recordings/mixed_audio/<timestamp>")
     parser.add_argument("--output-name", default="mixed_five_devices.wav", help="mixed wav file name")
     parser.add_argument(

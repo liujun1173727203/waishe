@@ -71,10 +71,8 @@ class PickupTestUseCases:
         print(f"[pickup-test] {message}", flush=True)
 
     def _audio_identity_text(self, talk_result: RandomAudioTalkResult | PreparedRandomAudio) -> str:
-        if talk_result.frequency_profile:
-            profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
-            return f"frequency_profile={profile}"
-        return f"digit_sequence={talk_result.digit_sequence}"
+        profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
+        return f"frequency_profile={profile}"
 
     def run_pickup_test(
         self,
@@ -87,7 +85,6 @@ class PickupTestUseCases:
         amplitude_ratio: float = 0.6,
         seed: Optional[int] = None,
         per_frame_delay: float = 0.02,
-        digit_sequence: Optional[str] = None,
         fingerprint_source: Optional[str] = None,
         test_device_input_type: str = "MicIn",
         test_device_output_type: str = "Speaker",
@@ -257,7 +254,6 @@ class PickupTestUseCases:
                 file_prefix=f"pickup_test_reference_{test_id}",
                 seed=seed,
                 amplitude_ratio=amplitude_ratio,
-                digit_sequence=digit_sequence,
                 fingerprint_source=fingerprint_source or self.playback_device.host,
             )
             self._log_step(f"reference audio ready path={prepared_audio.file_path}")
@@ -411,13 +407,10 @@ class PickupTestUseCases:
                 reference_audio_path=prepared_audio.file_path,
                 extracted_audio_path=extracted_audio_path,
                 score_threshold=similarity_threshold,
-                expected_digit_sequence=prepared_audio.digit_sequence,
             )
             self._log_step(
                 f"match analysis done matched={match_result.matched} "
-                f"score={match_result.best_score:.4f} threshold={match_result.threshold:.2f} "
-                f"expected_digits={match_result.expected_digit_sequence} "
-                f"detected_digits={match_result.detected_digit_sequence}"
+                f"score={match_result.best_score:.4f} threshold={match_result.threshold:.2f}"
             )
         elif callback_audio_path.exists() and prepared_audio is not None:
             analysis_source = "talk_callback"
@@ -434,13 +427,10 @@ class PickupTestUseCases:
                 audio_path=callback_audio_path,
                 reference_audio_path=prepared_audio.file_path,
                 score_threshold=similarity_threshold,
-                expected_digit_sequence=prepared_audio.digit_sequence,
             )
             self._log_step(
                 f"match analysis done source=talk_callback matched={match_result.matched} "
-                f"score={match_result.best_score:.4f} threshold={match_result.threshold:.2f} "
-                f"expected_digits={match_result.expected_digit_sequence} "
-                f"detected_digits={match_result.detected_digit_sequence}"
+                f"score={match_result.best_score:.4f} threshold={match_result.threshold:.2f}"
             )
         else:
             self._log_step("skip analysis because no valid recording or reference audio is available")

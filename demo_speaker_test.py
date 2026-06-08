@@ -7,7 +7,7 @@ from pathlib import Path
 
 from hikvision_isapi import HikvisionIsapiClient
 from hikvision_voice import HikvisionSDKError, HikvisionVoiceSDK
-from use_cases import RecorderDeviceConfig, SpeakerTestUseCases
+from use_cases import RecorderDevicePool, RecorderDevicePoolError, SpeakerTestUseCases
 from video_analysis import RecordedVideoAnalyzer, VideoAnalysisError
 
 
@@ -64,7 +64,6 @@ def main() -> int:
     parser.add_argument("--send-duration", type=int, default=4, help="generated audio duration in seconds")
     parser.add_argument("--similarity-threshold", type=float, default=0.7, help="match threshold, default 0.7")
     parser.add_argument("--seed", type=int, default=None, help="optional random seed")
-    parser.add_argument("--digit-sequence", default="", help="optional fixed DTMF digit sequence for compatibility debugging")
     parser.add_argument("--test-tone-id", default="", help="optional id for this device's continuous-frequency validation tone")
     parser.add_argument("--test-device-output-type", default="Speaker", help="test device audioOutputType, e.g. Speaker or LineOut")
     parser.add_argument(
@@ -73,12 +72,17 @@ def main() -> int:
         help="comma separated audioCompressionType list, default auto means iterate supported options",
     )
     parser.add_argument("--ffmpeg-path", default=r"D:\ffmpeg\ffmpeg-2026-05-28-git-7b46c6a2a3-essentials_build\bin\ffmpeg.exe", help="ffmpeg executable path")
-    parser.add_argument("--recorder-host", default="10.40.230.23", help="recorder device A ip or hostname")
-    parser.add_argument("--recorder-port", type=int, default=8000, help="recorder device A sdk port, default 8000")
-    parser.add_argument("--recorder-username", default="admin", help="recorder device A username")
-    parser.add_argument("--recorder-password", default="asdf!234", help="recorder device A password")
-    parser.add_argument("--recorder-channel", type=int, default=0, help="recorder device A preview channel, 0 means auto")
-    parser.add_argument("--recorder-voice-channel", type=int, default=1, help="recorder device A two-way audio channel")
+    parser.add_argument(
+        "--recorder-pool-config",
+        default=str(Path.cwd() / "configs" / "recorder_device_pool.json"),
+        help="recorder device pool config path",
+    )
+    parser.add_argument(
+        "--recorder-pool-wait-seconds",
+        type=float,
+        default=300.0,
+        help="max wait time for recorder device pool lease, default 300 seconds",
+    )
     parser.add_argument("--enable-log", action="store_true", help="enable sdk log output")
     args = parser.parse_args()
 
@@ -96,24 +100,13 @@ def main() -> int:
     sdk = HikvisionVoiceSDK()
     recorder_sdk = HikvisionVoiceSDK()
     isapi = HikvisionIsapiClient(sdk)
-    use_cases = SpeakerTestUseCases(
-        sdk=sdk,
-        isapi=isapi,
-        recorder_sdk=recorder_sdk,
-        analyzer=RecordedVideoAnalyzer(ffmpeg_path=args.ffmpeg_path),
-        recorder_device=RecorderDeviceConfig(
-            host=args.recorder_host,
-            port=args.recorder_port,
-            username=args.recorder_username,
-            password=args.recorder_password,
-            channel=args.recorder_channel,
-            voice_channel=args.recorder_voice_channel,
-        ),
-    )
+    recorder_pool = RecorderDevicePool(args.recorder_pool_config)
+    analyzer = RecordedVideoAnalyzer(ffmpeg_path=args.ffmpeg_path)
 
     session = None
     try:
         print(f"speaker test log file: {log_file_path}")
+        print(f"recorder device pool config: {args.recorder_pool_config}")
         sdk.initialize(enable_log=args.enable_log)
         recorder_sdk.initialize(enable_log=args.enable_log)
         session = sdk.login(args.host, args.port, args.username, args.password)
@@ -125,43 +118,61 @@ def main() -> int:
         )
         print(f"speaker test audioCompressionType list: {','.join(audio_compression_types)}")
         failed = False
-        for audio_compression_type in audio_compression_types:
-            print(f"speaker test start audioCompressionType={audio_compression_type}")
-            try:
-                result = use_cases.run_speaker_test(
-                    session=session,
-                    record_channel=args.record_channel or args.recorder_channel,
-                    voice_channel=args.voice_channel or session.default_voice_channel,
-                    record_duration_seconds=args.record_duration,
-                    send_duration_seconds=args.send_duration,
-                    similarity_threshold=args.similarity_threshold,
-                    seed=args.seed,
-                    digit_sequence=args.digit_sequence or None,
-                    fingerprint_source=args.test_tone_id or args.host,
-                    test_device_output_type=args.test_device_output_type,
-                    audio_compression_type=audio_compression_type,
-                )
+        print(
+            "wait recorder device pool lease "
+            f"timeout={args.recorder_pool_wait_seconds:.0f}s policy=first-come-first-served"
+        )
+        with recorder_pool.acquire(wait_seconds=args.recorder_pool_wait_seconds) as recorder_lease:
+            print(
+                "recorder device pool lease acquired:",
+                f"device_id={recorder_lease.device_id}",
+                f"host={recorder_lease.recorder_device.host}:{recorder_lease.recorder_device.port}",
+                f"max_wait={args.recorder_pool_wait_seconds:.0f}s",
+            )
+            use_cases = SpeakerTestUseCases(
+                sdk=sdk,
+                isapi=isapi,
+                recorder_sdk=recorder_sdk,
+                analyzer=analyzer,
+                recorder_device=recorder_lease.recorder_device,
+            )
+            for audio_compression_type in audio_compression_types:
+                print(f"speaker test start audioCompressionType={audio_compression_type}")
+                try:
+                    result = use_cases.run_speaker_test(
+                        session=session,
+                        record_channel=args.record_channel or recorder_lease.recorder_device.channel,
+                        voice_channel=args.voice_channel or session.default_voice_channel,
+                        record_duration_seconds=args.record_duration,
+                        send_duration_seconds=args.send_duration,
+                        similarity_threshold=args.similarity_threshold,
+                        seed=args.seed,
+                        fingerprint_source=args.test_tone_id or args.host,
+                        test_device_output_type=args.test_device_output_type,
+                        audio_compression_type=audio_compression_type,
+                    )
 
-                print(
-                    "speaker test done:",
-                    f"audio_compression_type={result.two_way_audio_status.audio_compression_type or audio_compression_type}",
-                    f"record={result.record_file_path}",
-                    f"reference={result.reference_audio_path}",
-                    f"audio_input_supported={result.audio_input_status.supported}",
-                    f"audio_output_type={result.two_way_audio_status.output_type}",
-                    f"microphone_volume={result.two_way_audio_status.microphone_volume}/{result.two_way_audio_status.microphone_volume_max}",
-                    _format_audio_identity(result.talk_result),
-                    f"has_sound={result.sound_result.has_sound}",
-                    f"match={result.match_result.matched}",
-                    f"score={result.match_result.best_score:.4f}",
-                    f"threshold={result.match_result.threshold:.2f}",
-                )
-            except (HikvisionSDKError, VideoAnalysisError, FileNotFoundError, ValueError) as exc:
-                failed = True
-                print(f"speaker test failed audioCompressionType={audio_compression_type}: {exc}", file=sys.stderr)
+                    print(
+                        "speaker test done:",
+                        f"audio_compression_type={result.two_way_audio_status.audio_compression_type or audio_compression_type}",
+                        f"record={result.record_file_path}",
+                        f"reference={result.reference_audio_path}",
+                        f"audio_input_supported={result.audio_input_status.supported}",
+                        f"audio_output_type={result.two_way_audio_status.output_type}",
+                        f"microphone_volume={result.two_way_audio_status.microphone_volume}/{result.two_way_audio_status.microphone_volume_max}",
+                        _format_audio_identity(result.talk_result),
+                        f"has_sound={result.sound_result.has_sound}",
+                        f"match={result.match_result.matched}",
+                        f"score={result.match_result.best_score:.4f}",
+                        f"threshold={result.match_result.threshold:.2f}",
+                    )
+                except (HikvisionSDKError, VideoAnalysisError, FileNotFoundError, ValueError) as exc:
+                    failed = True
+                    print(f"speaker test failed audioCompressionType={audio_compression_type}: {exc}", file=sys.stderr)
+            print(f"recorder device pool lease released: device_id={recorder_lease.device_id}")
         if failed:
             return 1
-    except (HikvisionSDKError, VideoAnalysisError, FileNotFoundError, ValueError) as exc:
+    except (HikvisionSDKError, VideoAnalysisError, FileNotFoundError, ValueError, RecorderDevicePoolError) as exc:
         print(f"use case failed: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -178,10 +189,8 @@ def main() -> int:
 
 
 def _format_audio_identity(talk_result) -> str:
-    if talk_result.frequency_profile:
-        profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
-        return f"frequency_profile={profile}"
-    return f"digit_sequence={talk_result.digit_sequence}"
+    profile = ",".join(f"{frequency:.1f}" for frequency in talk_result.frequency_profile)
+    return f"frequency_profile={profile}"
 
 
 def _resolve_audio_compression_types(

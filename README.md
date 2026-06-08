@@ -34,10 +34,10 @@ python .\demo_speaker_test.py `
   --host 10.18.117.22 `
   --username admin `
   --password asdf!234 `
-  --recorder-host 10.40.230.23 `
-  --recorder-username admin `
-  --recorder-password asdf!234
+  --recorder-pool-config .\configs\recorder_device_pool.json
 ```
+
+录音设备必须维护在 `configs/recorder_device_pool.json` 中。配置包含 IP、端口、用户名、密码、通道、语音通道和 `max_connections`。当录音设备连接数达到上限时，后续测试按先来先服务策略排队，默认最多等待 `300s`。
 
 默认时间线：
 
@@ -48,18 +48,12 @@ python .\demo_speaker_test.py `
 
 ## 扬声器测试音
 
-默认会使用被测设备 IP 作为 `test-tone-id`，生成稳定的设备专属测试音。测试音不仅数字序列不同，还会在音调比例、数字间隔和有效发声占比上做差异化，降低实验室多台设备同时播放时的误判概率。
+默认会使用被测设备 IP 作为 `test-tone-id`，生成稳定的设备专属离散频率指纹音。测试音由 `900Hz ~ 3200Hz` 内的多段固定正弦频率组成，段边界使用短淡化，降低实验室多台设备同时播放时的误判概率。
 
 可显式指定测试音 ID：
 
 ```powershell
 python .\demo_speaker_test.py --host 10.18.117.22 --test-tone-id device-B-001
-```
-
-也可指定固定数字序列：
-
-```powershell
-python .\demo_speaker_test.py --host 10.18.117.22 --digit-sequence 1234
 ```
 
 ## 判定逻辑
@@ -68,9 +62,9 @@ python .\demo_speaker_test.py --host 10.18.117.22 --digit-sequence 1234
 
 - `has_sound=True`：录音设备录像中存在有效声音。
 - `match=True`：录像音频中匹配到当前被测设备的扬声器测试音。
-- `score>=threshold`：匹配分数达到阈值，默认阈值 `0.8`。
+- `score>=threshold`：匹配分数达到阈值，默认阈值 `0.7`。
 
-分析逻辑同时使用 RMS 能量曲线、DTMF 频率特征、频偏容忍模板搜索和期望数字序列匹配。该设计适用于设备 B 扬声器播放、设备 A 麦克风录音、现场存在噪声且音调可能偏移的实验室环境。
+分析逻辑使用频率指纹分量检测：从参考音频提取频率探针，在录像音频中搜索这些频率分量是否出现。该设计适用于设备 B 扬声器播放、设备 A 麦克风录音、现场存在噪声且音调可能偏移的实验室环境。
 
 ## 输出目录
 
@@ -98,4 +92,27 @@ recordings/speaker_tests/<device-ip>/
 
 ```text
 D:\ffmpeg\ffmpeg-2026-05-28-git-7b46c6a2a3-essentials_build\bin\ffmpeg.exe
+```
+
+## Supplement Light IrLight Test
+
+补光灯用例当前以 `IrLight` 为准：
+
+- 能力判断：`GET /ISAPI/Image/channels/capabilities`，存在 `IrLight` 标签才认为支持补光灯。
+- 能力读取：从 `IrLight/mode` 的 `opt` 属性获取全部模式，从 `IrLight/brightnessLimit` 的 `min`、`max` 属性获取强度范围。
+- 配置读取：`GET /ISAPI/Image/channels/<channel>`，获取设备当前完整图像通道报文。
+- 配置写入：基于 GET 到的完整报文，只修改 `IrLight/mode` 和 `IrLight/brightnessLimit`，再 `PUT /ISAPI/Image/channels/<channel>`。
+- 遍历策略：对每个 `mode opt`，分别设置 `brightnessLimit=min/middle/max`，每档等待稳定后抓图。
+- 判定策略：使用 ffmpeg 读取抓图中心 `40% x 40%` ROI 灰度均值，判断 `middle - min` 和 `max - middle` 是否均超过 `--level-threshold`。
+
+输出文件位于：
+
+```text
+recordings/supplement_light_tests/<device-ip>/
+```
+
+抓图文件名包含 mode 和 brightnessLimit，例如：
+
+```text
+supplement_light_ir_auto_50_10_18_117_22_20260605_101010.jpg
 ```
