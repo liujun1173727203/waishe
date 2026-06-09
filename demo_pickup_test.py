@@ -117,7 +117,6 @@ def main() -> int:
         default="auto",
         help="comma separated playback device A audioCompressionType list, default auto means iterate supported options",
     )
-    parser.add_argument("--ffmpeg-path", default="ffmpeg", help="ffmpeg executable path")
     parser.add_argument("--playback-host", default="10.40.230.23", help="playback device A ip or hostname")
     parser.add_argument("--playback-port", type=int, default=8000, help="playback device A sdk port")
     parser.add_argument("--playback-username", default="admin", help="playback device A username")
@@ -152,7 +151,7 @@ def main() -> int:
     playback_sdk = HikvisionVoiceSDK()
     isapi = HikvisionIsapiClient(sdk)
     recorder_pool = RecorderDevicePool(args.recorder_pool_config)
-    analyzer = RecordedVideoAnalyzer(ffmpeg_path=args.ffmpeg_path)
+    analyzer = RecordedVideoAnalyzer()
 
     session = None
     try:

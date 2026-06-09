@@ -127,7 +127,6 @@ def main() -> int:
         default="auto",
         help="comma separated audioCompressionType list, default auto means iterate supported options",
     )
-    parser.add_argument("--ffmpeg-path", default="ffmpeg", help="ffmpeg executable path")
     parser.add_argument(
         "--recorder-pool-config",
         default=str(Path.cwd() / "configs" / "recorder_device_pool.json"),
@@ -157,7 +156,7 @@ def main() -> int:
     recorder_sdk = HikvisionVoiceSDK()
     isapi = HikvisionIsapiClient(sdk)
     recorder_pool = RecorderDevicePool(args.recorder_pool_config)
-    analyzer = RecordedVideoAnalyzer(ffmpeg_path=args.ffmpeg_path)
+    analyzer = RecordedVideoAnalyzer()
 
     session = None
     try:

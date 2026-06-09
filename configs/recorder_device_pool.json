@@ -1,0 +1,14 @@
+{
+  "devices": [
+    {
+      "id": "recorder-a-10.40.230.23",
+      "host": "10.40.230.23",
+      "port": 8000,
+      "username": "admin",
+      "password": "asdf!234",
+      "channel": 0,
+      "voice_channel": 1,
+      "max_connections": 1
+    }
+  ]
+}

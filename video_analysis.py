@@ -7,6 +7,8 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+from app_config import get_ffmpeg_path
+
 
 DEFAULT_SAMPLE_RATE = 8000
 DEFAULT_CHANNELS = 1
@@ -48,7 +50,7 @@ class ReferenceAudioMatchResult:
 class RecordedVideoAnalyzer:
     def __init__(
         self,
-        ffmpeg_path: str = "ffmpeg",
+        ffmpeg_path: str | None = None,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         channels: int = DEFAULT_CHANNELS,
         frame_ms: int = DEFAULT_FRAME_MS,
@@ -60,7 +62,7 @@ class RecordedVideoAnalyzer:
         2. 执行方法职责对应的核心处理。
         3. 返回处理结果，失败时抛出异常。
         """
-        self.ffmpeg_path = ffmpeg_path
+        self.ffmpeg_path = ffmpeg_path or get_ffmpeg_path()
         self.sample_rate = sample_rate
         self.channels = channels
         self.frame_ms = frame_ms
@@ -88,7 +90,7 @@ class RecordedVideoAnalyzer:
             return ffmpeg
 
         raise VideoAnalysisError(
-            f"ffmpeg not found: {self.ffmpeg_path}. Please install ffmpeg or pass a valid ffmpeg_path."
+            f"ffmpeg not found: {self.ffmpeg_path}. Please install ffmpeg or configure a valid ffmpeg_path in configs/app_config.json."
         )
 
     def extract_audio(

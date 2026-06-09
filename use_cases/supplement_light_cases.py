@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from app_config import get_ffmpeg_path
 from hikvision_isapi import HikvisionIsapiClient, IrcutFilterStatus, MixedSupplementLightStatus
 from hikvision_voice import CapturePictureResult, DeviceSession, HikvisionSDKError, HikvisionVoiceSDK, STREAM_TYPE_MAIN
 
@@ -77,7 +78,7 @@ class SupplementLightUseCases:
         sdk: HikvisionVoiceSDK,
         isapi: HikvisionIsapiClient,
         *,
-        ffmpeg_path: str = "ffmpeg",
+        ffmpeg_path: str | None = None,
     ) -> None:
         """
         作用：初始化对象实例，保存后续执行所需的依赖、配置或运行状态。
@@ -88,7 +89,7 @@ class SupplementLightUseCases:
         """
         self.sdk = sdk
         self.isapi = isapi
-        self.ffmpeg_path = ffmpeg_path
+        self.ffmpeg_path = ffmpeg_path or get_ffmpeg_path()
 
     def _log_step(self, message: str) -> None:
         """

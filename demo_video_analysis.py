@@ -17,12 +17,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Analyze recorded video audio")
     parser.add_argument("--video", required=True, help="recorded video file path")
     parser.add_argument("--reference-audio", default="", help="optional random audio wav path for matching")
-    parser.add_argument("--ffmpeg-path", default="ffmpeg", help="ffmpeg executable path")
     parser.add_argument("--rms-threshold", type=float, default=300.0, help="sound detection RMS threshold")
     parser.add_argument("--score-threshold", type=float, default=0.7, help="reference audio match threshold")
     args = parser.parse_args()
 
-    analyzer = RecordedVideoAnalyzer(ffmpeg_path=args.ffmpeg_path)
+    analyzer = RecordedVideoAnalyzer()
     try:
         sound_result = analyzer.analyze_sound_presence(
             video_path=args.video,
