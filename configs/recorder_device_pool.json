@@ -8,7 +8,7 @@
       "password": "asdf!234",
       "channel": 0,
       "voice_channel": 1,
-      "max_connections": 1
+      "max_connections": 5
     }
   ]
 }

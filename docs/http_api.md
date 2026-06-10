@@ -73,6 +73,14 @@ GET /api/testcases/{case_id}
 GET /api/tasks
 ```
 
+返回内容包含：
+
+- `tasks`：原始任务摘要列表
+- `grouped_tasks.queued`：排队中的任务
+- `grouped_tasks.running`：执行中的任务
+- `grouped_tasks.finished`：已完成任务
+- `counts`：各分组数量统计
+
 ### 查询单个任务详情
 
 ```http
@@ -133,11 +141,12 @@ POST /api/testcases/supplement_light_test/run
 
 ## 录音设备 IP 限制
 
-系统会维护“当前正在执行任务”的录音设备 IP 集合：
+系统会按“录音设备 IP”维度维护并发控制：
 
-- 同时最多允许 `5` 个不同录音设备 IP 处于执行中
-- 提交第 `6` 个不同录音设备 IP 时，接口会直接拒绝
-- 同一个录音设备 IP 可以重复提交多个任务
+- 每一台录音设备最多允许 `5` 个任务同时执行
+- 当同一台录音设备收到第 `6` 个请求时，不会拒绝
+- 第 `6` 个及之后的请求会保持 `pending` 状态排队
+- 只要前面的任务释放录音设备名额，排队任务就会自动开始执行
 
 当前实现规则：
 
@@ -162,6 +171,7 @@ POST /api/testcases/supplement_light_test/run
 - `task_id`
 - `case_id`
 - `status`
+- `task_status`
 - `success`
 - `exit_code`
 - `error`
@@ -180,6 +190,7 @@ POST /api/testcases/supplement_light_test/run
 - `result`：提炼后的执行结果摘要
 - `execution_log`：优先读取任务日志文件，读取不到时回退为 `stdout + stderr`
 - `attachments`：任务执行期间新增或变更的截图、录像、音频、日志等附件
+- `task_status`：结构化任务状态，包含是否排队、排队序号、当前录音设备并发占用数等信息
 
 ## 附件字段
 

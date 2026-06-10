@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from testcase_api import ROOT_DIR, build_command_for_test_case, get_test_case, list_test_cases, serialize_test_case
 
 
-MAX_ACTIVE_RECORDER_IPS = 5
+MAX_CONCURRENT_TASKS_PER_RECORDER_IP = 5
 ARTIFACT_SCAN_DIRS = (ROOT_DIR / "recordings", ROOT_DIR / "SdkLog")
 
 
@@ -26,10 +26,6 @@ class TaskSubmitRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     recorder_device_ip: str | None = None
     timeout_seconds: float | None = Field(default=None, gt=0)
-
-
-class RecorderIpLimitError(RuntimeError):
-    pass
 
 
 @dataclass
@@ -82,7 +78,7 @@ class TaskRecord:
     attachments: list[TaskAttachment] = field(default_factory=list)
     scan_snapshot_before: dict[str, tuple[int, float]] = field(default_factory=dict)
 
-    def to_dict(self, *, summary: bool = False) -> dict[str, Any]:
+    def to_dict(self, *, summary: bool = False, task_status: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = {
             "task_id": self.task_id,
             "case_id": self.case_id,
@@ -91,6 +87,7 @@ class TaskRecord:
             "recorder_device_ip": self.recorder_device_ip,
             "timeout_seconds": self.timeout_seconds,
             "status": self.status,
+            "task_status": task_status or {"phase": self.status},
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -118,6 +115,7 @@ class TaskRecord:
 class AsyncTaskRegistry:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
+        self._condition = asyncio.Condition(self._lock)
         self._tasks: dict[str, TaskRecord] = {}
         self._active_recorder_ip_counts: dict[str, int] = {}
 
@@ -141,8 +139,6 @@ class AsyncTaskRegistry:
         )
 
         async with self._lock:
-            if normalized_ip:
-                self._reserve_recorder_ip_locked(normalized_ip)
             self._tasks[record.task_id] = record
 
         asyncio.create_task(self._run_task(record.task_id))
@@ -150,14 +146,40 @@ class AsyncTaskRegistry:
 
     async def list_tasks(self) -> list[dict[str, Any]]:
         async with self._lock:
-            return [record.to_dict(summary=True) for record in self._tasks.values()]
+            return [
+                record.to_dict(summary=True, task_status=self._build_task_status_locked(record))
+                for record in self._tasks.values()
+            ]
+
+    async def list_tasks_grouped(self) -> dict[str, list[dict[str, Any]]]:
+        async with self._lock:
+            summaries = [
+                record.to_dict(summary=True, task_status=self._build_task_status_locked(record))
+                for record in self._tasks.values()
+            ]
+
+        summaries.sort(key=lambda item: (item.get("created_at") or 0, item.get("task_id") or ""))
+        grouped = {
+            "queued": [],
+            "running": [],
+            "finished": [],
+        }
+        for task in summaries:
+            task_status = task.get("task_status", {})
+            if task_status.get("is_queued"):
+                grouped["queued"].append(task)
+            elif task_status.get("is_running"):
+                grouped["running"].append(task)
+            else:
+                grouped["finished"].append(task)
+        return grouped
 
     async def get_task(self, task_id: str) -> dict[str, Any]:
         async with self._lock:
             record = self._tasks.get(task_id)
             if record is None:
                 raise KeyError(f"task not found: {task_id}")
-            return record.to_dict(summary=False)
+            return record.to_dict(summary=False, task_status=self._build_task_status_locked(record))
 
     async def get_attachment(self, task_id: str, attachment_id: str) -> TaskAttachment:
         async with self._lock:
@@ -176,8 +198,8 @@ class AsyncTaskRegistry:
     async def _run_task(self, task_id: str) -> None:
         async with self._lock:
             record = self._tasks[task_id]
-            record.status = "running"
-            record.started_at = time.time()
+
+        await self._acquire_recorder_slot(task_id)
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -222,16 +244,7 @@ class AsyncTaskRegistry:
                 _finalize_task_record(record)
         finally:
             if record.recorder_device_ip:
-                async with self._lock:
-                    self._release_recorder_ip_locked(record.recorder_device_ip)
-
-    def _reserve_recorder_ip_locked(self, recorder_device_ip: str) -> None:
-        active_ip_count = len(self._active_recorder_ip_counts)
-        if recorder_device_ip not in self._active_recorder_ip_counts and active_ip_count >= MAX_ACTIVE_RECORDER_IPS:
-            raise RecorderIpLimitError(
-                f"active recorder device ip count exceeded limit {MAX_ACTIVE_RECORDER_IPS}: {recorder_device_ip}"
-            )
-        self._active_recorder_ip_counts[recorder_device_ip] = self._active_recorder_ip_counts.get(recorder_device_ip, 0) + 1
+                await self._release_recorder_slot(record.recorder_device_ip)
 
     def _release_recorder_ip_locked(self, recorder_device_ip: str) -> None:
         current_count = self._active_recorder_ip_counts.get(recorder_device_ip, 0)
@@ -239,6 +252,60 @@ class AsyncTaskRegistry:
             self._active_recorder_ip_counts.pop(recorder_device_ip, None)
             return
         self._active_recorder_ip_counts[recorder_device_ip] = current_count - 1
+
+    async def _acquire_recorder_slot(self, task_id: str) -> None:
+        async with self._condition:
+            record = self._tasks[task_id]
+            if not record.recorder_device_ip:
+                record.status = "running"
+                record.started_at = time.time()
+                return
+
+            recorder_device_ip = record.recorder_device_ip
+            await self._condition.wait_for(
+                lambda: self._active_recorder_ip_counts.get(recorder_device_ip, 0) < MAX_CONCURRENT_TASKS_PER_RECORDER_IP
+            )
+            self._active_recorder_ip_counts[recorder_device_ip] = (
+                self._active_recorder_ip_counts.get(recorder_device_ip, 0) + 1
+            )
+            record.status = "running"
+            record.started_at = time.time()
+
+    async def _release_recorder_slot(self, recorder_device_ip: str) -> None:
+        async with self._condition:
+            self._release_recorder_ip_locked(recorder_device_ip)
+            self._condition.notify_all()
+
+    def _build_task_status_locked(self, record: TaskRecord) -> dict[str, Any]:
+        recorder_device_ip = record.recorder_device_ip
+        active_count = self._active_recorder_ip_counts.get(recorder_device_ip or "", 0) if recorder_device_ip else 0
+        queue_position = self._queue_position_locked(record)
+        return {
+            "phase": record.status,
+            "display": _display_status(record.status, queue_position),
+            "is_terminal": record.status in {"succeeded", "failed", "timeout"},
+            "is_running": record.status == "running",
+            "is_queued": record.status == "pending" and queue_position is not None,
+            "queue_position": queue_position,
+            "recorder_device_ip": recorder_device_ip,
+            "current_active_count_for_recorder_ip": active_count,
+            "max_concurrent_tasks_per_recorder_ip": MAX_CONCURRENT_TASKS_PER_RECORDER_IP,
+        }
+
+    def _queue_position_locked(self, record: TaskRecord) -> int | None:
+        if record.status != "pending" or not record.recorder_device_ip:
+            return None
+
+        pending_records = [
+            task
+            for task in self._tasks.values()
+            if task.recorder_device_ip == record.recorder_device_ip and task.status == "pending"
+        ]
+        pending_records.sort(key=lambda task: (task.created_at, task.task_id))
+        for index, pending_record in enumerate(pending_records, start=1):
+            if pending_record.task_id == record.task_id:
+                return index
+        return None
 
 
 def create_app() -> FastAPI:
@@ -268,7 +335,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/tasks")
     async def get_tasks() -> dict[str, Any]:
-        return {"success": True, "tasks": await registry.list_tasks()}
+        tasks = await registry.list_tasks()
+        grouped_tasks = await registry.list_tasks_grouped()
+        return {
+            "success": True,
+            "tasks": tasks,
+            "grouped_tasks": grouped_tasks,
+            "counts": {
+                "total": len(tasks),
+                "queued": len(grouped_tasks["queued"]),
+                "running": len(grouped_tasks["running"]),
+                "finished": len(grouped_tasks["finished"]),
+            },
+        }
 
     @app.get("/api/tasks/{task_id}")
     async def get_task(task_id: str) -> dict[str, Any]:
@@ -297,9 +376,9 @@ def create_app() -> FastAPI:
         active = await registry.active_recorder_ips()
         return {
             "success": True,
-            "limit": MAX_ACTIVE_RECORDER_IPS,
+            "limit_per_recorder_device_ip": MAX_CONCURRENT_TASKS_PER_RECORDER_IP,
             "active_recorder_device_ips": active,
-            "active_distinct_ip_count": len(active),
+            "active_recorder_device_ip_count": len(active),
         }
 
     for testcase in list_test_cases():
@@ -319,8 +398,6 @@ def _add_submit_route(app: FastAPI, registry: AsyncTaskRegistry, case_id: str) -
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RecorderIpLimitError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -331,6 +408,7 @@ def _add_submit_route(app: FastAPI, registry: AsyncTaskRegistry, case_id: str) -
             "case_id": case_id,
             "status": task.status,
             "recorder_device_ip": task.recorder_device_ip,
+            "queue_policy": f"max {MAX_CONCURRENT_TASKS_PER_RECORDER_IP} concurrent tasks per recorder device ip; extra tasks stay pending",
             "task_status_url": f"/api/tasks/{task.task_id}",
         }
 
@@ -360,6 +438,22 @@ def _duration_seconds(started_at: float | None, finished_at: float | None) -> fl
     if started_at is None or finished_at is None:
         return None
     return round(finished_at - started_at, 3)
+
+
+def _display_status(status: str, queue_position: int | None) -> str:
+    if status == "pending" and queue_position is not None:
+        return f"queued (position {queue_position})"
+    if status == "pending":
+        return "pending"
+    if status == "running":
+        return "running"
+    if status == "succeeded":
+        return "succeeded"
+    if status == "failed":
+        return "failed"
+    if status == "timeout":
+        return "timeout"
+    return status
 
 
 def _finalize_task_record(record: TaskRecord) -> None:

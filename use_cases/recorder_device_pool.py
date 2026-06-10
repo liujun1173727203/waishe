@@ -270,7 +270,7 @@ class RecorderDevicePool:
             if device_id in seen_ids:
                 raise RecorderDevicePoolError(f"duplicate recorder device id: {device_id}")
             seen_ids.add(device_id)
-            max_connections = int(item.get("max_connections", 1))
+            max_connections = int(item.get("max_connections", 5))
             if max_connections <= 0:
                 raise RecorderDevicePoolError(f"recorder device {device_id} max_connections must be positive")
             devices.append(
