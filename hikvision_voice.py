@@ -714,6 +714,7 @@ class HikvisionVoiceSDK:
             self._sdk = ctypes.WinDLL(str(self.sdk_root / "HCNetSDK.dll"))
             return
 
+        self._extend_linux_library_path()
         self._preload_linux_dependencies()
         self._sdk = ctypes.CDLL(str(self._find_linux_library("hcnetsdk")), mode=ctypes.RTLD_GLOBAL)
 
@@ -726,8 +727,8 @@ class HikvisionVoiceSDK:
         3. 返回处理结果，失败时抛出异常。
         """
         sdk_path = NET_DVR_LOCAL_SDK_PATH()
-        component_dir = self._get_component_dir()
-        sdk_path.sPath = self._encode_path(component_dir if component_dir.exists() else self.sdk_root)
+        init_dir = self._get_sdk_init_dir()
+        sdk_path.sPath = self._encode_path(init_dir)
         if not self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_SDK_PATH, byref(sdk_path)):
             raise self._last_error("NET_DVR_SetSDKInitCfg(SDK_PATH) failed", "NET_DVR_SetSDKInitCfg")
         crypto_path = self._find_first_existing_library(
@@ -777,6 +778,15 @@ class HikvisionVoiceSDK:
             return com_dir
         return self.sdk_root
 
+    def _get_sdk_init_dir(self) -> Path:
+        """
+        作用：返回传给 NET_DVR_SetSDKInitCfg(SDK_PATH) 的目录。
+        Linux 传 SDK 根目录，Windows 优先传组件目录。
+        """
+        if IS_WINDOWS:
+            return self._get_component_dir()
+        return self.sdk_root
+
     def _iter_sdk_search_dirs(self) -> list[Path]:
         """
         作用：返回 SDK 相关搜索目录，去重后用于查找主库和依赖库。
@@ -808,6 +818,18 @@ class HikvisionVoiceSDK:
             f"Linux SDK library containing '{token}' not found under {self.sdk_root}. "
             "Install Hikvision Linux HCNetSDK into libs/linux64 or set HIKVISION_SDK_ROOT."
         )
+
+    def _extend_linux_library_path(self) -> None:
+        """
+        作用：补齐当前进程的 LD_LIBRARY_PATH，方便 SDK 后续按名称加载组件库。
+        """
+        path_parts = [str(directory) for directory in self._iter_sdk_search_dirs()]
+        current = os.environ.get("LD_LIBRARY_PATH", "")
+        existing = [part for part in current.split(":") if part]
+        for part in reversed(path_parts):
+            if part not in existing:
+                existing.insert(0, part)
+        os.environ["LD_LIBRARY_PATH"] = ":".join(existing)
 
     def _preload_linux_dependencies(self) -> None:
         """
