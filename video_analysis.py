@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import math
-import shutil
 import subprocess
 import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-from app_config import get_ffmpeg_path
+from app_config import get_ffmpeg_path, resolve_ffmpeg_path
 
 
 DEFAULT_SAMPLE_RATE = 8000
@@ -75,23 +74,10 @@ class RecordedVideoAnalyzer:
         2. 解析并校验目标字段。
         3. 返回解析后的结构化结果。
         """
-        configured = Path(self.ffmpeg_path)
-        if configured.is_file():
-            return str(configured.resolve())
-
-        if configured.is_dir():
-            candidates = [configured / "ffmpeg.exe", configured / "ffmpeg"]
-            for candidate in candidates:
-                if candidate.is_file():
-                    return str(candidate.resolve())
-
-        ffmpeg = shutil.which(self.ffmpeg_path)
-        if ffmpeg is not None:
-            return ffmpeg
-
-        raise VideoAnalysisError(
-            f"ffmpeg not found: {self.ffmpeg_path}. Please install ffmpeg or configure a valid ffmpeg_path in configs/app_config.json."
-        )
+        try:
+            return resolve_ffmpeg_path(self.ffmpeg_path)
+        except FileNotFoundError as exc:
+            raise VideoAnalysisError(str(exc)) from exc
 
     def extract_audio(
         self,

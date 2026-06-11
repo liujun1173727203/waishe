@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import time
 from contextlib import suppress
@@ -9,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from app_config import get_ffmpeg_path
+from app_config import get_ffmpeg_path, resolve_ffmpeg_path
 from hikvision_isapi import HikvisionIsapiClient, IrcutFilterStatus, MixedSupplementLightStatus
 from hikvision_voice import CapturePictureResult, DeviceSession, HikvisionSDKError, HikvisionVoiceSDK, STREAM_TYPE_MAIN
 
@@ -451,17 +450,10 @@ class SupplementLightUseCases:
         2. 解析并校验目标字段。
         3. 返回解析后的结构化结果。
         """
-        configured = Path(self.ffmpeg_path)
-        if configured.is_file():
-            return str(configured.resolve())
-        if configured.is_dir():
-            for candidate in (configured / "ffmpeg.exe", configured / "ffmpeg"):
-                if candidate.is_file():
-                    return str(candidate.resolve())
-        resolved = shutil.which(self.ffmpeg_path)
-        if resolved is not None:
-            return resolved
-        raise HikvisionSDKError(f"未找到 ffmpeg: {self.ffmpeg_path}", api_name="ffmpeg")
+        try:
+            return resolve_ffmpeg_path(self.ffmpeg_path)
+        except FileNotFoundError as exc:
+            raise HikvisionSDKError(f"未找到 ffmpeg: {exc}", api_name="ffmpeg") from exc
 
     def _default_output_dir(self, host: str) -> Path:
         """
