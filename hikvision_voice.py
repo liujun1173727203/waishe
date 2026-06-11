@@ -292,9 +292,9 @@ class HikvisionVoiceSDK:
         """
         default_platform_dir = "win64" if IS_WINDOWS else "linux64"
         configured_root = sdk_root or os.environ.get("HIKVISION_SDK_ROOT")
-        self.sdk_root = Path(
+        self.sdk_root = self._resolve_sdk_root(
             configured_root or Path(__file__).resolve().parent / "libs" / default_platform_dir
-        ).resolve()
+        )
         self.path_encoding = "gbk" if IS_WINDOWS else "utf-8"
         self._sdk = None
         self._initialized = False
@@ -705,7 +705,7 @@ class HikvisionVoiceSDK:
                 f"SDK path not found: {self.sdk_root}. "
                 "Set HIKVISION_SDK_ROOT or pass sdk_root to HikvisionVoiceSDK."
             )
-        com_dir = self.sdk_root / "HCNetSDKCom"
+        com_dir = self._get_component_dir()
         if IS_WINDOWS:
             os.add_dll_directory(str(self.sdk_root))
             if com_dir.exists():
@@ -714,7 +714,7 @@ class HikvisionVoiceSDK:
             self._sdk = ctypes.WinDLL(str(self.sdk_root / "HCNetSDK.dll"))
             return
 
-        self._preload_linux_dependencies(com_dir)
+        self._preload_linux_dependencies()
         self._sdk = ctypes.CDLL(str(self._find_linux_library("hcnetsdk")), mode=ctypes.RTLD_GLOBAL)
 
     def _configure_init_paths(self) -> None:
@@ -726,7 +726,7 @@ class HikvisionVoiceSDK:
         3. 返回处理结果，失败时抛出异常。
         """
         sdk_path = NET_DVR_LOCAL_SDK_PATH()
-        component_dir = self.sdk_root / "HCNetSDKCom"
+        component_dir = self._get_component_dir()
         sdk_path.sPath = self._encode_path(component_dir if component_dir.exists() else self.sdk_root)
         if not self._sdk.NET_DVR_SetSDKInitCfg(NET_SDK_INIT_CFG_SDK_PATH, byref(sdk_path)):
             raise self._last_error("NET_DVR_SetSDKInitCfg(SDK_PATH) failed", "NET_DVR_SetSDKInitCfg")
@@ -755,6 +755,43 @@ class HikvisionVoiceSDK:
         """
         return str(Path(path).resolve()).encode(self.path_encoding, errors="ignore")
 
+    def _resolve_sdk_root(self, sdk_root: str | os.PathLike[str]) -> Path:
+        """
+        作用：规范化 SDK 根目录，兼容传入仓库根目录或平台子目录两种写法。
+        """
+        candidate = Path(sdk_root).resolve()
+        platform_dir = "win64" if IS_WINDOWS else "linux64"
+        nested_candidate = candidate / platform_dir
+        if candidate.is_dir() and nested_candidate.is_dir():
+            marker = "HCNetSDK.dll" if IS_WINDOWS else "libhcnetsdk.so"
+            if not (candidate / marker).exists() and (nested_candidate / marker).exists():
+                return nested_candidate.resolve()
+        return candidate
+
+    def _get_component_dir(self) -> Path:
+        """
+        作用：返回 HCNetSDK 组件目录；若组件目录不存在，则回退到 SDK 根目录。
+        """
+        com_dir = self.sdk_root / "HCNetSDKCom"
+        if com_dir.exists():
+            return com_dir
+        return self.sdk_root
+
+    def _iter_sdk_search_dirs(self) -> list[Path]:
+        """
+        作用：返回 SDK 相关搜索目录，去重后用于查找主库和依赖库。
+        """
+        search_dirs = [self.sdk_root, self.sdk_root / "HCNetSDKCom", self.sdk_root / "ClientDemoDll"]
+        unique_dirs: list[Path] = []
+        seen: set[Path] = set()
+        for directory in search_dirs:
+            resolved = directory.resolve()
+            if resolved in seen or not resolved.exists():
+                continue
+            seen.add(resolved)
+            unique_dirs.append(resolved)
+        return unique_dirs
+
     def _find_linux_library(self, token: str) -> Path:
         """
         作用：作为内部辅助方法，完成本方法对应的数据处理。
@@ -763,15 +800,16 @@ class HikvisionVoiceSDK:
         2. 执行方法职责对应的核心处理。
         3. 返回处理结果，失败时抛出异常。
         """
-        for candidate in self.sdk_root.rglob("*.so*"):
-            if candidate.is_file() and token.lower() in candidate.name.lower():
-                return candidate.resolve()
+        for directory in self._iter_sdk_search_dirs():
+            for candidate in sorted(directory.glob("*.so*")):
+                if candidate.is_file() and token.lower() in candidate.name.lower():
+                    return candidate.resolve()
         raise FileNotFoundError(
             f"Linux SDK library containing '{token}' not found under {self.sdk_root}. "
             "Install Hikvision Linux HCNetSDK into libs/linux64 or set HIKVISION_SDK_ROOT."
         )
 
-    def _preload_linux_dependencies(self, com_dir: Path) -> None:
+    def _preload_linux_dependencies(self) -> None:
         """
         作用：作为内部辅助方法，完成本方法对应的数据处理。
         执行步骤：
@@ -779,15 +817,41 @@ class HikvisionVoiceSDK:
         2. 执行方法职责对应的核心处理。
         3. 返回处理结果，失败时抛出异常。
         """
-        search_dirs = [self.sdk_root]
-        if com_dir.exists():
-            search_dirs.append(com_dir)
-        for directory in search_dirs:
-            for library in sorted(directory.glob("*.so*")):
-                try:
-                    ctypes.CDLL(str(library.resolve()), mode=ctypes.RTLD_GLOBAL)
-                except OSError:
+        preferred_names = (
+            "libcrypto",
+            "libssl",
+            "libz",
+            "libhpr",
+            "libHCCore",
+            "libNPQos",
+            "libPlayCtrl",
+            "libAudioRender",
+            "libAudioProcess",
+            "libhcnetsdk",
+        )
+        pending: list[Path] = []
+        for directory in self._iter_sdk_search_dirs():
+            pending.extend(sorted(directory.glob("*.so*")))
+
+        # Linux SDK bundles often depend on sibling .so files under libs/linux64.
+        loaded: set[Path] = set()
+        while pending:
+            progress = False
+            pending.sort(key=lambda path: self._linux_library_priority(path, preferred_names))
+            remaining: list[Path] = []
+            for library in pending:
+                resolved = library.resolve()
+                if resolved in loaded:
                     continue
+                try:
+                    ctypes.CDLL(str(resolved), mode=ctypes.RTLD_GLOBAL)
+                    loaded.add(resolved)
+                    progress = True
+                except OSError:
+                    remaining.append(library)
+            if not progress:
+                break
+            pending = remaining
 
     def _find_first_existing_library(self, names: tuple[str, ...]) -> Optional[Path]:
         """
@@ -797,13 +861,22 @@ class HikvisionVoiceSDK:
         2. 执行方法职责对应的核心处理。
         3. 返回处理结果，失败时抛出异常。
         """
-        search_dirs = [self.sdk_root, self.sdk_root / "HCNetSDKCom", self.sdk_root / "ClientDemoDll"]
-        for directory in search_dirs:
+        for directory in self._iter_sdk_search_dirs():
             for name in names:
                 candidate = directory / name
                 if candidate.is_file():
                     return candidate.resolve()
         return None
+
+    def _linux_library_priority(self, library: Path, preferred_names: tuple[str, ...]) -> tuple[int, int, str]:
+        """
+        作用：为 Linux 动态库预加载排序，让基础依赖优先加载。
+        """
+        name = library.name.lower()
+        for index, preferred in enumerate(preferred_names):
+            if preferred.lower() in name:
+                return (0, index, name)
+        return (1, 0, name)
 
     def _bind_functions(self) -> None:
         """
