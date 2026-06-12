@@ -292,9 +292,10 @@ class SpeakerTestUseCases:
                 file_path=record_file_path,
                 channel=recorder_channel,
             )
+            record_file_path = recorder.file_path
             self._log_step(
                 f"recorder stream started handle={recorder.handle} "
-                f"channel={recorder_channel} path={record_file_path}"
+                f"channel={recorder_channel} path={record_file_path} mode={recorder.save_mode}"
             )
             record_started_at = time.monotonic()
             if not recorder.wait_for_first_data(timeout_seconds=min(5.0, max(1.0, record_duration_seconds / 2))):
@@ -339,9 +340,9 @@ class SpeakerTestUseCases:
                     f"file_size_bytes={recorder.file_size_bytes} "
                     f"path={record_file_path}"
                 )
-                self._log_step("call NET_DVR_StopSaveRealData")
+                self._log_step(f"stop recorder save mode={recorder.save_mode}")
                 recorder.stop_save_real_data()
-                self._log_step("NET_DVR_StopSaveRealData done")
+                self._log_step(f"recorder save stop done mode={recorder.save_mode}")
                 self._log_step("call NET_DVR_StopRealPlay")
                 recorder.stop_real_play()
                 self._log_step("NET_DVR_StopRealPlay done")

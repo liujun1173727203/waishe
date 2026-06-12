@@ -10,6 +10,7 @@ from use_cases import RecorderDevicePool, RecorderDevicePoolError
 
 
 POST_STOP_SETTLE_SECONDS = 3.0
+FIRST_DATA_WAIT_SECONDS = 5.0
 
 
 def main() -> int:
@@ -60,7 +61,13 @@ def main() -> int:
                 channel=channel,
             )
             actual_output = recorder.file_path
-            print(f"recording started: channel={channel} output={actual_output}")
+            print(f"recording started: channel={channel} output={actual_output} mode={recorder.save_mode}")
+            if not recorder.wait_for_first_data(timeout_seconds=FIRST_DATA_WAIT_SECONDS):
+                raise HikvisionSDKError(
+                    "stream record did not receive first frame in time",
+                    api_name="NET_DVR_RealPlay_V40",
+                    error_message=f"no callback data within {FIRST_DATA_WAIT_SECONDS:.1f}s",
+                )
             time.sleep(args.duration)
             print("recording finished")
             print(
@@ -69,8 +76,9 @@ def main() -> int:
                 f"received_bytes={recorder.received_bytes}",
                 f"file_size_bytes={recorder.file_size_bytes}",
             )
+            print(f"stop recorder save mode={recorder.save_mode}")
             recorder.stop_save_real_data()
-            print("NET_DVR_StopSaveRealData done")
+            print(f"recorder save stop done mode={recorder.save_mode}")
             recorder.stop_real_play()
             print("NET_DVR_StopRealPlay done")
             time.sleep(POST_STOP_SETTLE_SECONDS)
@@ -95,8 +103,9 @@ def main() -> int:
                 f"received_bytes={recorder.received_bytes}",
                 f"file_size_bytes={recorder.file_size_bytes}",
             )
+            print(f"stop recorder save mode={recorder.save_mode}")
             recorder.stop_save_real_data()
-            print("NET_DVR_StopSaveRealData done")
+            print(f"recorder save stop done mode={recorder.save_mode}")
             recorder.stop_real_play()
             print("NET_DVR_StopRealPlay done")
             time.sleep(POST_STOP_SETTLE_SECONDS)

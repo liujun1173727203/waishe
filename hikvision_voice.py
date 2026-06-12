@@ -20,6 +20,7 @@ NET_SDK_INIT_CFG_LIBEAY_PATH = 3
 NET_SDK_INIT_CFG_SSLEAY_PATH = 4
 
 NET_SDK_LOCAL_CFG_TYPE_TALK_MODE = 5
+NET_SDK_LOCAL_CFG_TYPE_GENERAL = 17
 STREAM_ID_LEN = 32
 
 AUDIO_FLAG_LOCAL = 0
@@ -33,6 +34,9 @@ STREAM_TYPE_SUB = 1
 
 LINK_MODE_TCP = 0
 LINK_MODE_UDP = 1
+
+NET_DVR_SYSHEAD = 1
+NET_DVR_STREAMDATA = 2
 
 SDK_BOOL = c_uint32
 SDK_LONG = c_int32
@@ -80,6 +84,25 @@ class NET_DVR_LOCAL_TALK_MODE_CFG(Structure):
     _fields_ = [
         ("byTalkMode", c_ubyte),
         ("byRes", c_byte * 127),
+    ]
+
+
+class NET_DVR_LOCAL_GENERAL_CFG(Structure):
+    _fields_ = [
+        ("byExceptionCbDirectly", c_ubyte),
+        ("byNotSplitRecordFile", c_ubyte),
+        ("byResumeUpgradeEnable", c_ubyte),
+        ("byAlarmJsonPictureSeparate", c_ubyte),
+        ("byRes", c_ubyte * 4),
+        ("i64FileSize", ctypes.c_uint64),
+        ("dwResumeUpgradeTimeout", c_uint32),
+        ("byAlarmReconnectMode", c_ubyte),
+        ("byStdXmlBufferSize", c_ubyte),
+        ("byMultiplexing", c_ubyte),
+        ("byFastUpgrade", c_ubyte),
+        ("byAlarmPrealloc", c_ubyte),
+        ("bChangeEventIPToDomain", c_ubyte),
+        ("byRes1", c_ubyte * 230),
     ]
 
 
@@ -318,6 +341,8 @@ class HikvisionVoiceSDK:
             self._bind_functions()
             if not self._sdk.NET_DVR_Init():
                 raise self._last_error("NET_DVR_Init failed", "NET_DVR_Init")
+            if not IS_WINDOWS:
+                self._configure_linux_local_general_cfg()
             if enable_log:
                 target = Path(log_dir or Path.cwd() / "SdkLog")
                 target.mkdir(parents=True, exist_ok=True)
@@ -538,7 +563,9 @@ class HikvisionVoiceSDK:
         recorder = StreamRecorder(
             sdk=self,
             session=session,
-            file_path=Path(file_path) if file_path is not None else self._default_stream_record_path(session.host, target_channel),
+            file_path=self._normalize_stream_record_path(
+                Path(file_path) if file_path is not None else self._default_stream_record_path(session.host, target_channel)
+            ),
             channel=target_channel,
             stream_type=stream_type,
             link_mode=link_mode,
@@ -846,16 +873,26 @@ class HikvisionVoiceSDK:
             "libhpr",
             "libHCCore",
             "libNPQos",
-            "libPlayCtrl",
-            "libAudioRender",
-            "libAudioProcess",
+            "libhcnetsdk",
+        )
+        essential_tokens = (
+            "libcrypto",
+            "libssl",
+            "libz",
+            "libhpr",
+            "libHCCore",
+            "libNPQos",
             "libhcnetsdk",
         )
         pending: list[Path] = []
         for directory in self._iter_sdk_search_dirs():
-            pending.extend(sorted(directory.glob("*.so*")))
+            for candidate in sorted(directory.glob("*.so*")):
+                candidate_name = candidate.name.lower()
+                if any(token.lower() in candidate_name for token in essential_tokens):
+                    pending.append(candidate)
 
-        # Linux SDK bundles often depend on sibling .so files under libs/linux64.
+        # Headless callback recording does not need eager loading of display/decoder
+        # stacks such as PlayCtrl/HXVA/SuperRender, which may touch X11/VAAPI/CUDA.
         loaded: set[Path] = set()
         while pending:
             progress = False
@@ -1026,7 +1063,15 @@ class HikvisionVoiceSDK:
         """
         host_dir = "".join(char if char.isalnum() or char in "._-" else "_" for char in host)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return Path.cwd() / "recordings" / "streams" / host_dir / f"stream_ch{channel}_{timestamp}.mp4"
+        suffix = ".mp4" if IS_WINDOWS else ".ps"
+        return Path.cwd() / "recordings" / "streams" / host_dir / f"stream_ch{channel}_{timestamp}{suffix}"
+
+    def _normalize_stream_record_path(self, file_path: Path) -> Path:
+        if IS_WINDOWS:
+            return file_path
+        if file_path.suffix.lower() in {".ps", ".dat"}:
+            return file_path
+        return file_path.with_suffix(".ps")
 
     def _default_capture_picture_path(self, host: str, channel: int) -> Path:
         """
@@ -1067,6 +1112,16 @@ class HikvisionVoiceSDK:
                 return
             time.sleep(0.05)
         raise HikvisionSDKError(f"capture file is empty: {file_path}", api_name=api_name)
+
+    def _configure_linux_local_general_cfg(self) -> None:
+        cfg = NET_DVR_LOCAL_GENERAL_CFG()
+        cfg.byNotSplitRecordFile = 1
+        cfg.byStdXmlBufferSize = 1
+        if not self._sdk.NET_DVR_SetSDKLocalCfg(NET_SDK_LOCAL_CFG_TYPE_GENERAL, byref(cfg)):
+            raise self._last_error(
+                "NET_DVR_SetSDKLocalCfg(GENERAL) failed",
+                "NET_DVR_SetSDKLocalCfg",
+            )
 
     def stdxml_config(
         self,
@@ -1388,6 +1443,14 @@ class StreamRecorder:
         self._received_bytes = 0
         self._received_packets = 0
         self._first_data_event = threading.Event()
+        self._output_file = None
+
+    @property
+    def save_mode(self) -> str:
+        """
+        返回当前平台使用的录像保存模式，便于上层记录真实日志。
+        """
+        return "sdk_save_real_data" if IS_WINDOWS else "callback_passback_record"
 
     def start(self) -> None:
         """
@@ -1401,13 +1464,16 @@ class StreamRecorder:
             return
 
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        if not IS_WINDOWS:
+            self._output_file = self.file_path.open("wb")
         preview_info = NET_DVR_PREVIEWINFO()
         preview_info.lChannel = self.channel
         preview_info.dwStreamType = self.stream_type
         preview_info.dwLinkMode = self.link_mode
         preview_info.hPlayWnd = None
         preview_info.bBlocked = bool(self.blocked)
-        preview_info.bPassbackRecord = False
+        preview_info.bPassbackRecord = not IS_WINDOWS
+        preview_info.dwDisplayBufNum = 1
 
         def _handle_real_data(real_handle: int, data_type: int, data: bytes) -> None:
             """
@@ -1421,6 +1487,8 @@ class StreamRecorder:
                 self._received_bytes += len(data)
                 self._received_packets += 1
                 self._first_data_event.set()
+                if not IS_WINDOWS:
+                    self._write_linux_record_data(data_type, data)
             if self.real_data_callback is not None:
                 self.real_data_callback(real_handle, data_type, data)
 
@@ -1432,16 +1500,22 @@ class StreamRecorder:
             None,
         )
         if handle < 0:
+            self._close_output_file()
             raise self.sdk._last_error("NET_DVR_RealPlay_V40 failed", "NET_DVR_RealPlay_V40")
-
-        encoded_path = self.sdk._encode_path(self.file_path)
-        if not self.sdk._sdk.NET_DVR_SaveRealData(handle, encoded_path):
-            self.sdk._sdk.NET_DVR_StopRealPlay(handle)
-            raise self.sdk._last_error("NET_DVR_SaveRealData failed", "NET_DVR_SaveRealData")
 
         self.handle = handle
         self._saving = True
         self.sdk._remember_callback(handle, callback)
+        if IS_WINDOWS:
+            encoded_path = self.sdk._encode_path(self.file_path)
+            if not self.sdk._sdk.NET_DVR_SaveRealData(handle, encoded_path):
+                self.sdk._forget_callback(handle)
+                self.handle = None
+                self._saving = False
+                self.sdk._sdk.NET_DVR_StopRealPlay(handle)
+                raise self.sdk._last_error("NET_DVR_SaveRealData failed", "NET_DVR_SaveRealData")
+        else:
+            self._output_file.flush()
 
     def stop(self, log_callback: Optional[Callable[[str], None]] = None) -> None:
         """
@@ -1465,27 +1539,25 @@ class StreamRecorder:
             if log_callback is not None:
                 log_callback(message)
 
-        handle = self.handle
-        self.handle = None
         errors: list[HikvisionSDKError] = []
         stop_started_at = time.monotonic()
 
         _log(
-            f"stream recorder stop begin handle={handle} "
+            f"stream recorder stop begin handle={self.handle} "
             f"saving={self._saving} received_bytes={self._received_bytes} "
             f"received_packets={self._received_packets}"
         )
 
         if self._saving:
             save_stop_started_at = time.monotonic()
-            _log("call NET_DVR_StopSaveRealData")
+            _log(f"stop recorder save mode={self.save_mode}")
             try:
                 self.stop_save_real_data()
             except HikvisionSDKError as exc:
                 errors.append(exc)
             else:
                 _log(
-                    "NET_DVR_StopSaveRealData done "
+                    f"recorder save stop done mode={self.save_mode} "
                     f"elapsed={time.monotonic() - save_stop_started_at:.3f}s"
                 )
 
@@ -1517,8 +1589,12 @@ class StreamRecorder:
         if self.handle is None or not self._saving:
             return
         self._saving = False
-        if not self.sdk._sdk.NET_DVR_StopSaveRealData(self.handle):
-            raise self.sdk._last_error("NET_DVR_StopSaveRealData failed", "NET_DVR_StopSaveRealData")
+        if IS_WINDOWS:
+            if not self.sdk._sdk.NET_DVR_StopSaveRealData(self.handle):
+                raise self.sdk._last_error("NET_DVR_StopSaveRealData failed", "NET_DVR_StopSaveRealData")
+            return
+        if self._output_file is not None:
+            self._output_file.flush()
 
     def stop_real_play(self) -> None:
         """
@@ -1535,6 +1611,7 @@ class StreamRecorder:
         if not self.sdk._sdk.NET_DVR_StopRealPlay(handle):
             raise self.sdk._last_error("NET_DVR_StopRealPlay failed", "NET_DVR_StopRealPlay")
         self.sdk._forget_callback(handle)
+        self._close_output_file()
 
     @property
     def received_bytes(self) -> int:
@@ -1569,6 +1646,24 @@ class StreamRecorder:
         3. 返回处理结果，失败时抛出异常。
         """
         return self._first_data_event.wait(timeout_seconds)
+
+    def _write_linux_record_data(self, data_type: int, data: bytes) -> None:
+        """
+        Linux SDK demo recommends enabling bPassbackRecord and persisting the
+        real-play callback stream data directly instead of NET_DVR_SaveRealData.
+        """
+        if self._output_file is None:
+            return
+        if data_type not in {NET_DVR_SYSHEAD, NET_DVR_STREAMDATA}:
+            return
+        self._output_file.write(data)
+        self._output_file.flush()
+
+    def _close_output_file(self) -> None:
+        if self._output_file is None:
+            return
+        self._output_file.close()
+        self._output_file = None
 
     def __enter__(self) -> "StreamRecorder":
         """

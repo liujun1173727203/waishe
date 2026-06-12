@@ -79,7 +79,7 @@ def main() -> int:
                 f"input={volume_status.input_status.value}/{volume_status.input_status.maximum}",
                 f"output={volume_status.output_status.value}/{volume_status.output_status.maximum}",
             )
-            print(f"recording started: channel={channel} output={recorder.file_path}")
+            print(f"recording started: channel={channel} output={recorder.file_path} mode={recorder.save_mode}")
             time.sleep(args.duration)
             print(f"recording finished after {args.duration}s")
             print(
@@ -88,8 +88,9 @@ def main() -> int:
                 f"received_bytes={recorder.received_bytes}",
                 f"file_size_bytes={recorder.file_size_bytes}",
             )
+            print(f"stop recorder save mode={recorder.save_mode}")
             recorder.stop_save_real_data()
-            print("NET_DVR_StopSaveRealData done")
+            print(f"recorder save stop done mode={recorder.save_mode}")
             recorder.stop_real_play()
             print("NET_DVR_StopRealPlay done")
             time.sleep(POST_STOP_SETTLE_SECONDS)
@@ -114,8 +115,9 @@ def main() -> int:
                 f"received_bytes={recorder.received_bytes}",
                 f"file_size_bytes={recorder.file_size_bytes}",
             )
+            print(f"stop recorder save mode={recorder.save_mode}")
             recorder.stop_save_real_data()
-            print("NET_DVR_StopSaveRealData done")
+            print(f"recorder save stop done mode={recorder.save_mode}")
             recorder.stop_real_play()
             print("NET_DVR_StopRealPlay done")
             time.sleep(POST_STOP_SETTLE_SECONDS)
